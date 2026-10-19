@@ -16,8 +16,6 @@ tier 0 零依赖底层 —— 依赖面按 module 结算，那条 require 会顺
 github.com/oagentkit/tools/bashguard。
 关联 oagentkit/guardx#3
 
-- 文档(changelog)：补 CHANGELOG.md（从 git 历史生成）
-
 ## [v0.9.0] — 2026-10-19
 
 - 杂务(deps)：依赖地板对齐远端最新（guardx v0.5.0 / runtime v0.7.0 / textx v0.5.0） (13)
