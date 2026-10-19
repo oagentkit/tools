@@ -6,7 +6,7 @@ toolchain go1.27.2
 
 require (
 	github.com/cloudwego/eino v0.9.21
-	github.com/oagentkit/guardx v0.5.0
+	github.com/oagentkit/guardx v0.7.0
 	github.com/oagentkit/runtime v0.7.0
 	github.com/oagentkit/textx v0.5.0
 	github.com/oekit/concurrency v0.17.1
@@ -40,6 +40,7 @@ require (
 	github.com/yargevad/filepathx v1.0.0 // indirect
 	golang.org/x/arch v0.11.0 // indirect
 	golang.org/x/exp v0.0.0-20230713183714-613f0c0eb8a1 // indirect
-	golang.org/x/sys v0.29.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
+	mvdan.cc/sh/v3 v3.14.1
 )

@@ -1,6 +1,6 @@
 # AGENTS.md — oagentkit/tools
 
-> 外部工具接入——CLI 编码 agent 统一调用/公开资料检索/git 工作副本沙箱/确定性 SAST 扫描
+> 外部工具接入——CLI 编码 agent 统一调用/公开资料检索/git 工作副本沙箱/确定性 SAST 扫描/Shell 命令静态裁决
 > module：`github.com/oagentkit/tools` · org：[oagentkit = Open Agent Kit](https://github.com/oagentkit)
 > 矩阵分层：**tier 2**（集成层，依赖 tier0/tier1 + 重第三方地板）
 
@@ -11,6 +11,7 @@
 `websearch/`
 `workcopy/`
 `sast/`
+`bashguard/`  ← 自 guardx 迁入（v0.10.0）：Shell 命令静态裁决，依赖 mvdan.cc/sh
 ```
 
 ## 硬规则
@@ -19,6 +20,8 @@
 
 - 依赖严格自底向上，**禁止反向依赖**。本仓是 tier 2，只允许依赖 tier ≤ 2 的仓。
 - 本仓依赖的矩阵内仓：`guardx`、`runtime`、`textx`。
+  ⚠️ guardx 是 tier 0 零依赖底层（`workcopy`/`sast` 用 `guardx/logredact`），
+  本仓 tier 2 —— 依赖方向合法。
 - 改 module 路径必须同步：全部 import、go.mod、README 安装行。
 
 ### 错误处理

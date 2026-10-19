@@ -1,6 +1,6 @@
 # tools
 
-外部工具接入——CLI 编码 agent 统一调用/公开资料检索/git 工作副本沙箱/确定性 SAST 扫描 —— oagentkit 模块矩阵 **tier 2**（集成层，依赖 tier0/tier1 + 重第三方地板）。
+外部工具接入——CLI 编码 agent 统一调用/公开资料检索/git 工作副本沙箱/确定性 SAST 扫描/Shell 命令静态裁决 —— oagentkit 模块矩阵 **tier 2**（集成层，依赖 tier0/tier1 + 重第三方地板）。
 
 ```
 go get github.com/oagentkit/tools
@@ -12,6 +12,7 @@ go get github.com/oagentkit/tools
 | `websearch` | 公开资料检索抽象，接口可插拔（缺省 SearXNG 自建实例） |
 | `workcopy` | Git 工作副本沙箱：隔离环境 + merge-base 校验 |
 | `sast` | 确定性 SAST 前置扫描（不执行被扫代码） |
+| `bashguard` | Shell 命令静态风险裁决（自 `guardx/bashguard` 迁入 v0.10.0）：经真 shell AST 判定只读性，**不执行命令** |
 
 ## 定位
 
