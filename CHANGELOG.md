@@ -2,6 +2,22 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.10.0] — 2026-10-19
+
+### 新增(bashguard)：接收 guardx/bashguard —— Shell 静态裁决落到重仓
+
+自 github.com/oagentkit/guardx/bashguard 迁入（guardx v0.7.0 起该路径退役）。
+为什么迁到 tools：bashguard 依赖 mvdan.cc/sh/v3（真 shell AST 解析），guardx 是
+tier 0 零依赖底层 —— 依赖面按 module 结算，那条 require 会顺着依赖树扩散到
+矩阵每一层。带重依赖的能力该待在带该依赖的仓里；tools 本身就有「git 工作副本
+沙箱」，同属命令执行面。
+包名与语义不变（静态解析、不执行命令；解析失败/含动态词/含写重定向/含复合控制流
+一律非只读），只是 import 路径从 github.com/oagentkit/guardx/bashguard 变为
+github.com/oagentkit/tools/bashguard。
+关联 oagentkit/guardx#3
+
+- 文档(changelog)：补 CHANGELOG.md（从 git 历史生成）
+
 ## [v0.9.0] — 2026-10-19
 
 - 杂务(deps)：依赖地板对齐远端最新（guardx v0.5.0 / runtime v0.7.0 / textx v0.5.0） (13)
