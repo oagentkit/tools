@@ -2,6 +2,31 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.10.1] — 2026-10-20
+
+- 杂务(deps)：依赖地板抬到最新
+
+地板对齐到发版时刻的各依赖最新 tag：
+- oekit/pkg、oekit/concurrency 抬到 v0.18.0（oekit/logx 已是最新 v0.7.1）
+- 矩阵内跨仓依赖抬到各仓最新 tag
+依据 matrix-tools#44：最新 tag 的依赖地板在「打 tag 那一刻」就已落后一格，
+只能靠后续版本补齐（tag 受 protect-tags ruleset 保护不能重打）。
+
+
+- 文档(changelog)：按新生成器规则重生成 CHANGELOG.md
+
+生成器修复（oagentkit/matrix-tools#43）落地：
+① `[round-N] ` 前缀被剥离 → conventional commit 解析不再失效，
+   **commit body 保留**（此前整段被丢弃，发布说明只剩标题）；
+② 非 conventional 提交也保留 body；
+③ `--check` 识别「待发版段」（预写了但还没打 tag 的那段）。
+本 PR 恢复的是**本就在 commit body 里**的正文（迁移步骤、代码块、
+判据锚点）——此前被 `[round-N] ` 前缀导致的解析失败丢弃了。
+**没有任何发布说明内容被删除**：删除的行都能在新增行里找到对应
+（规范化掉 `(#N)` 与 `[round-N] ` 前缀后逐行比对）。
+关联：oagentkit/matrix-tools#43、oagentkit/matrix-tools#40
+
+
 ## [v0.10.0] — 2026-10-19
 
 ### 新增(bashguard)：接收 guardx/bashguard —— Shell 静态裁决落到重仓
