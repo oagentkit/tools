@@ -22,7 +22,7 @@ github.com/oagentkit/tools/bashguard。
 
 ## [v0.8.0] — 2026-10-19
 
-- 杂务(deps)：依赖地板对齐远端最新（concurrency v0.17.1 / logx v0.7.1 / pkg v0.15.1） (#13)
+- 杂务(deps)：依赖地板对齐远端最新（concurrency v0.17.1 / logx v0.7.1 / pkg v0.15.1）
 
 ## [v0.7.1] — 2026-10-19
 
@@ -51,11 +51,11 @@ github.com/oagentkit/tools/bashguard。
 acpx 与 workcopy 的测试在本沙箱下无法运行 —— 子进程 heredoc 与 git init 复制 hooks
 模板被沙箱禁止；已在未改动的原单仓对照确认这批包拆分前同样失败，与本次改动无关。
 
-- 杂务(deps)：依赖地板升到「历史最新 + 0.1.0」 (#5)
-- 杂务(deps)：跟进最新 tag (#4)
-- 杂务(deps)：oekit 依赖升级 (#3)
-- 杂务(deps)：guardx v0.1.1 → v0.1.2 (#2)
-- 杂务(deps)：跨仓依赖升级 (#1)
+- 杂务(deps)：依赖地板升到「历史最新 + 0.1.0」
+- 杂务(deps)：跟进最新 tag
+- 杂务(deps)：oekit 依赖升级
+- 杂务(deps)：guardx v0.1.1 → v0.1.2
+- 杂务(deps)：跨仓依赖升级
 - 杂务(deps)：oekit/concurrency v0.12.0 -> v0.13.1
 - 杂务(deps)：oekit 三模块升至最新（pkg v0.13.0 / concurrency v0.12.0 / logx v0.7.0）
 - 杂务(deps)：oekit/concurrency v0.6.0 -> v0.9.0
