@@ -6,12 +6,12 @@ toolchain go1.27.2
 
 require (
 	github.com/cloudwego/eino v0.9.21
-	github.com/oagentkit/guardx v0.7.0
-	github.com/oagentkit/runtime v0.7.0
-	github.com/oagentkit/textx v0.5.0
-	github.com/oekit/concurrency v0.17.1
+	github.com/oagentkit/guardx v0.8.2
+	github.com/oagentkit/runtime v0.7.1
+	github.com/oagentkit/textx v0.6.1
+	github.com/oekit/concurrency v0.18.0
 	github.com/oekit/logx v0.7.1
-	github.com/oekit/pkg v0.15.1
+	github.com/oekit/pkg v0.18.0
 )
 
 require (
