@@ -76,10 +76,10 @@ github.com/nikolalohinski/gonja v1.5.3 h1:GsA+EEaZDZPGJ8JtpeGN78jidhOlxeJROpqMT9
 github.com/nikolalohinski/gonja v1.5.3/go.mod h1:RmjwxNiXAEqcq1HeK5SSMmqFJvKOfTfXhkJv6YBtPa4=
 github.com/oagentkit/guardx v0.13.1 h1:aE7vepfsqw7j+plnbh1CMWsA3WTjbTHBNbg8qr8LxBg=
 github.com/oagentkit/guardx v0.13.1/go.mod h1:1gg5y6sYCgdVlxXjfjxBIk2zbNnQH566iu/qad9sric=
-github.com/oagentkit/runtime v0.7.1 h1:1agVkDDbxzDLDkCuVMrz/n6yclPmBBYRXc5p9ShL62U=
-github.com/oagentkit/runtime v0.7.1/go.mod h1:5J0N36LMqHEz48UpUoaFgZOoyXIcD2rzwzZ3hWssOKo=
-github.com/oagentkit/textx v0.6.1 h1:sv2CZN0mtuZV+BMpK9PpSr+X/kfm4BFMG06QGm0kAL8=
-github.com/oagentkit/textx v0.6.1/go.mod h1:3u7RVcT2ZWbIolyEy3h+Lk7W2xbs75qbKg0s0Qc625A=
+github.com/oagentkit/runtime v0.7.2 h1:m2q7ss541jxDXjHpMTRvrNnAxjFWYUsHjgpL+Svt61w=
+github.com/oagentkit/runtime v0.7.2/go.mod h1:omEmDtJF+/VdsT8DTTEVT7+ibbt+uYPonUENWBEYctM=
+github.com/oagentkit/textx v0.6.2 h1:5fIrtVyPsTYbV9JZf6p71lOpVgwUfrzRGQF+hirbALA=
+github.com/oagentkit/textx v0.6.2/go.mod h1:Siea8u2Jl1NxTfQ1oxuoRkzBwEJnugptr8rdbQ8Icmw=
 github.com/oekit/concurrency v0.19.0 h1:TkQ9fsYsyCTL+eSJDOoxuUYddkHG+RZUxCuE2WO3098=
 github.com/oekit/concurrency v0.19.0/go.mod h1:2t5QeK3WHWbJVKwTnPiiBZqHxig3fzEPTefGedFU648=
 github.com/oekit/logx v0.7.1 h1:u+AbbPn0iCnzt11brLXpfj+2CIQhThFEsAwBDXzAfyE=
