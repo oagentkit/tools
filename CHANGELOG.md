@@ -2,6 +2,59 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.10.4] — 2026-10-23
+
+- 杂务(deps)：依赖地板跟到上游本轮新版本——guardx v0.14.0 concurrency v0.20.2 pkg v0.22.0
+
+## 下游要做什么
+**`go mod tidy`**。地板抬高对下游是**隐式破坏性变更**：不跑就报
+`updates to go.mod needed`，且报错不提真正原因（**不是本仓的 API 变了**）。
+本仓**自身代码零改动**——只看本仓的 diff 看不出这是一次地板抬高：
+本 commit 只改 `go.mod` / `go.sum`，**零 `.go` 变更**。
+## 为什么抬
+上一版 tag 打出去时，它依赖的模块的**新版已经先发出**了——
+即「打 tag 那一刻地板就落后」。矩阵的「发版时刻地板时效」门禁
+（`verify_tag_floor.py --org oagentkit --latest-only`）在本仓**下一次 push**
+时当场报红：
+- github.com/oagentkit/guardx@v0.14.0
+- github.com/oekit/concurrency@v0.20.2
+- github.com/oekit/pkg@v0.22.0
+门禁给的修法是「抬 go.mod 地板 → go mod tidy → 重新发 tag」。
+本 PR 就是那条修法。
+⚠️ 现在门禁还判绿，是因为本仓 HEAD（`9db09f3e`，2026-10-21T10:49:45Z）
+**早于**这三条依赖的 tag 发布时刻——即**静默期**：
+- oekit/pkg v0.22.0        2026-10-22T09:20:11Z   HEAD → 发布 = +22.5h
+- guardx v0.14.0           2026-10-22T09:47:05Z   HEAD → 发布 = +23.0h
+- oekit/concurrency v0.20.2 2026-10-23T03:09:39Z  HEAD → 发布 = +40.3h
+用门禁自己的 `check_ref()` 复现（同一份 go.mod、同一批 tag，只把 ref 时刻
+推进到现在）：HEAD 时刻 ⇒ ✅ 0 处红；此刻 push ⇒ ❌ 3 处红。
+## 为什么无行为差异
+本仓实际 import 的第一方/基座子包与上游改动的交集为**空**：
+**`github.com/oagentkit/guardx` v0.13.1 → v0.14.0**
+上游 `.go` 改动只落在 `permgate/permgate.go`（新增「只读拦截」段）。
+本仓实际 import 的 `guardx/logredact` **一字未动**。
+**`github.com/oekit/concurrency` v0.19.0 → v0.20.2**
+上游 `.go` 改动只落在 `syncx/`（新增 `Gate.TryAcquire`；`KeyedGate` 的
+幂等标记裸 bool → `atomic.Bool` + CAS）。本仓实际 import 的
+`concurrency/async`、`concurrency/singleflight` **一字未动**。
+**`github.com/oekit/pkg` v0.20.0 → v0.22.0**
+上游 diff 只**新增** `pathx/*`（新包）与 `stringx/csv.go`——**纯增量**。
+本仓实际 import 的 `pkg/httpjson`、`pkg/jsonrepair` **一字未动**。
+⇒ 三条都是行为中性的抬地板，本仓转发面与符号集不变。
+## 版本口径
+走 **patch v0.10.4**，依据是**本仓自己的连续先例**：本仓连续两次
+「只抬地板、零代码改动」都走 patch——
+- v0.10.2「依赖地板追平上游本轮新版本——guardx v0.13.1 / concurrency v0.19.0 / pkg v0.20.0」
+- v0.10.3「依赖地板跟到矩阵本轮新版本——runtime v0.7.2 / textx v0.6.2」
+本次同样是零行为差异、不新增任何包，不构成 breaking。
+## 门禁
+```
+go build / vet / test -race   ✅
+gofmt -l .                    ✅ 空
+go mod tidy -diff             ✅ 无输出
+```
+
+
 ## [v0.10.3] — 2026-10-21
 
 - 杂务(deps)：依赖地板跟到矩阵本轮新版本——runtime v0.7.2 textx v0.6.2
