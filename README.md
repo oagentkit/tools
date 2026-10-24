@@ -23,6 +23,7 @@ go get github.com/oagentkit/tools
 ## 外部依赖地板
 
 - `github.com/cloudwego/eino`
+- `mvdan.cc/sh/v3`
 
 ## 与 oekit 的关系
 
