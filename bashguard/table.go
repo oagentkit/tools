@@ -15,7 +15,7 @@ var (
 // defaultTable 只读共享模板（调用方不得改写；仅供 Analyze 缺省路径）。
 func defaultTable() *Table {
 	defaultTableOnce.Do(func() {
-		defaultTableTpl = &Table{Commands: defaultCommands()}
+		defaultTableTpl = &Table{Commands: defaultCommands(), Destructive: defaultDestructive()}
 	})
 	return defaultTableTpl
 }
@@ -23,7 +23,10 @@ func defaultTable() *Table {
 // DefaultTable 内置缺省策略表（副本：调用方改表不影响后续 DefaultTable）。
 func DefaultTable() *Table {
 	tpl := defaultTable()
-	return &Table{Commands: clonePolicies(tpl.Commands)}
+	return &Table{
+		Commands:    clonePolicies(tpl.Commands),
+		Destructive: clonePolicies(tpl.Destructive),
+	}
 }
 
 // clonePolicies 浅拷贝策略映射：外层键值独立，SafeFlags/Subcommands 内层共享
@@ -173,4 +176,54 @@ func defaultCommands() map[string]Policy {
 	commands["xargs"] = Policy{Wrapper: true, SafeFlags: with(bools("-r", "-0", "-d", "-t", "-p", "-E", "-n", "-P", "-L", "-l", "-I", "-J", "-S", "-s", "-x", "-a"), "-d", "string", "-E", "string", "-n", "string", "-P", "string", "-L", "string", "-I", "string", "-J", "string", "-S", "string", "-s", "string", "-a", "string")}
 
 	return commands
+}
+
+// defaultDestructive 内置不可逆规则表（缺省档）。
+//
+// 这是一张**共享表**：每个带 shell 工具的宿主本来都要自己写一份「哪些命令
+// 不可逆」的判定，而漏判一条的代价是命令真跑了。表驱动比各写一份可靠。
+//
+// 判据形态与 issue 一致：命令名决定 + flag 决定 + flag 与参数值组合决定。
+// 键尾 "*" 是前缀族（mkfs 系列）。
+//
+// ⚠️ 语义边界：命中=不可逆；**没命中不等于安全**（只意味着没命中已知规则）。
+func defaultDestructive() map[string]Policy {
+	return map[string]Policy{
+		// 递归删除：带递归标志才算不可逆（删单个文件不算——那还能从回收站捞回来）
+		"rm": {DestructiveFlags: []string{"-r", "-R", "--recursive"}},
+		// 建文件系统 / 抹盘：写设备，恒不可逆
+		"mkfs*":  {Destructive: true},
+		"mke2fs": {Destructive: true},
+		"mkswap": {Destructive: true},
+		"wipefs": {Destructive: true},
+		// dd 写设备：of= 是写目标（if= 只是读源）
+		"dd": {DestructiveArgs: []string{"of="}},
+		// 关机 / 重启 / 换内核：恒不可逆
+		"shutdown": {Destructive: true},
+		"reboot":   {Destructive: true},
+		"poweroff": {Destructive: true},
+		"halt":     {Destructive: true},
+		"kexec":    {Destructive: true},
+		// systemctl：停用/屏蔽服务与关机类子命令
+		"systemctl": {Subcommands: map[string]Policy{
+			"disable":  {Destructive: true},
+			"mask":     {Destructive: true},
+			"poweroff": {Destructive: true},
+			"reboot":   {Destructive: true},
+			"halt":     {Destructive: true},
+			"kexec":    {Destructive: true},
+		}},
+		// 递归改权限 / 属主：改完不知道原来是什么（不可复原）
+		"chmod": {DestructiveFlags: []string{"-R", "--recursive"}},
+		"chown": {DestructiveFlags: []string{"-R", "--recursive"}},
+		// 强杀：杀掉的进程回不来
+		"kill":    {DestructiveArgs: []string{"-9", "KILL", "SIGKILL"}},
+		"killall": {DestructiveArgs: []string{"-9", "KILL", "SIGKILL"}},
+		// kubectl 删除：对象删掉就没了
+		"kubectl": {Subcommands: map[string]Policy{
+			"delete": {Destructive: true},
+		}},
+		// 清日志：--vacuum-* 把旧日志真删掉
+		"journalctl": {DestructiveFlags: []string{"--vacuum-time", "--vacuum-size", "--vacuum-files"}},
+	}
 }
