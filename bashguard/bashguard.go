@@ -11,6 +11,14 @@
 //   - 安全包装（env/nice/nohup/time/timeout/stdbuf/xargs）剥壳后判定内核；
 //   - 复合命令（&& || ; |）每一段都必须只读，整体才只读。
 //
+// # 三档：只读 / 写 / 不可逆
+//
+// 只读判定回答「会不会改东西」；**不可逆判定**（Decision.Destructive）回答
+// 「一旦跑就收不回来」——两者正交：rm file 不是只读但可逆，rm -rf / 不可逆。
+// 不可逆判据走**独立的一张表**（Table.Destructive，见 destructive.go）：
+// 只读表只放只读命令，而不可逆判据要覆盖 rm / mkfs / dd 这类写命令。
+// 「要不要二次确认」是调用方的策略决定；本包给的是「这条命令不可逆」这个事实。
+//
 // 上限 10K 字符（对标 ZCode：超长命令不进解析器）。
 package bashguard
 
@@ -54,11 +62,27 @@ type Policy struct {
 	// AllowBareOperandsPrefix NoBareOperands 的豁免前缀（date 的 +FORMAT 形态：
 	// 裸操作数以 "+" 开头是格式串不是写目标）。前缀空串不放行任何操作数。
 	AllowBareOperandsPrefix []string
+	// Destructive 该命令恒不可逆（删数据 / 写设备 / 关机 …）。
+	//
+	// 只在**不可逆规则表**（Table.Destructive）里有意义——只读表是只读表，
+	// 不可逆判据单列一张（见 destructive.go 的说明）。
+	Destructive bool
+	// DestructiveFlags 命中即不可逆的 flag（"-r" / "--recursive"）。
+	// 短 flag 支持联合形态（-rf 里的 r）。
+	DestructiveFlags []string
+	// DestructiveArgs 命中即不可逆的参数（**前缀**匹配："of=" 命中 "of=/dev/sda"）。
+	DestructiveArgs []string
 }
 
 // Table 策略表。
 type Table struct {
 	Commands map[string]Policy
+	// Destructive 不可逆规则表：命令名 → 判据（只用 Policy 的三个 Destructive* 字段）。
+	//
+	// 与只读表**分开**：只读表只放只读命令（"不在只读策略表" 是既有语义），
+	// 而不可逆判据要覆盖 rm / mkfs / dd 这类写命令。键尾的 "*" 表示前缀族
+	//（"mkfs*" 覆盖 mkfs.ext4 等）。
+	Destructive map[string]Policy
 }
 
 // Invocation 提取的单次调用（观测面）。
@@ -74,6 +98,16 @@ type Decision struct {
 	ReadOnly bool
 	// Reason 非只读原因（人可读，审计用）。
 	Reason string
+	// Destructive 该调用含不可逆动作（删数据 / 写设备 / 关机 / 递归改权限 …）。
+	//
+	// 与 ReadOnly **正交**：只读与否是另一档。一个命令可以「不是只读、但可逆」
+	//（rm file），也可以「不是只读、且不可逆」（rm -rf /）。
+	//
+	// 语义边界：false 只意味着「没命中已知规则」，**不意味着安全**——
+	// 是否要二次确认是调用方的策略决定，本包只给「这条命令不可逆」这个事实。
+	Destructive bool
+	// DestructiveReason 不可逆依据（人可读，审计用）；未命中时为空。
+	DestructiveReason string
 	// Invocations 提取的调用序列（观测/风险面）。
 	Invocations []Invocation
 }
@@ -96,8 +130,15 @@ func Analyze(cmdStr string, t *Table) Decision {
 		if reason := t.evalStmt(stmt, &d.Invocations); reason != "" {
 			d.ReadOnly = false
 			d.Reason = reason
-			return d
+			break
 		}
+	}
+	// 不可逆判定**独立于**只读判定：命令被只读门拒了（rm 不在只读表），
+	// 它仍可能是不可逆的——而「这条命令不可逆」正是调用方要据此要二次确认的
+	// 那个事实。只读结论先出也不影响它。
+	if ok, why := t.destructiveScan(d.Invocations); ok {
+		d.Destructive = true
+		d.DestructiveReason = why
 	}
 	return d
 }
