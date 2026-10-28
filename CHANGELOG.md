@@ -2,6 +2,98 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.11.0] — 2026-10-28
+
+### 新增(bashguard)：给不可逆（destructive）一档——判据进表、进判定
+
+issue #25：bashguard 的判定只有两档（只读 / 非只读），缺「不可逆」这一档。
+shell 工具实际需要三档：只读（直接跑）/ 写（可逆，直接跑）/ **不可逆**
+（删数据 / 改权限 / 关机 / 写设备 ⇒ 要二次确认）。第三档表达不了，下游只能
+自己写一份——而漏判一条的代价是命令真跑了。
+改动：
+- `Decision.Destructive bool` + `Decision.DestructiveReason string`；
+- `Table.Destructive map[string]Policy`：不可逆规则表（**独立于只读表**）；
+- `Policy` 补三个不可逆维度：`Destructive` / `DestructiveFlags` /
+  `DestructiveArgs`（表键尾 `*` 是前缀族，如 `mkfs*`）。
+为什么单列一张表：只读表按设计只放只读命令（rm/mv/cp/chmod 刻意不在表里，
+既有测试也钉住了「不在只读策略表」这条理由）⇒ 把写命令塞进只读表会改掉既有
+语义，也会让只读表不再是只读表。落法是 Table 加第二个映射，复用 Policy 类型。
+为什么与只读判定正交：两者回答的是两个问题——「会不会改东西」与「一旦跑就
+收不回来」。删单个文件不是只读但可逆，递归删目录不可逆；合成一档会把可逆的
+写也报成不可逆（过度确认同样是坏结果）。
+判定要点：
+- 不可逆扫描**独立于**只读扫描跑：命令被只读门拒了，它仍可能是不可逆的；
+- 包装要剥壳（env 套递归删除 ⇒ 不可逆性在内层命令上）；
+- 联合短 flag 认（`-rf` 里的 `r`）；参数按**前缀**匹配（`of=` 命中 `of=/dev/sda`）；
+- 子命令级（systemctl disable / kubectl delete）；本层 flag 不在表里定位不到
+  子命令时**多报不漏报**（扫全部非 flag token：假阳性只是多要一次确认，
+  假阴性是命令真跑了）。
+内置表覆盖 issue 点名的典型对象：递归删除、mkfs 系列、dd 写设备、
+reboot/shutdown/poweroff/halt/kexec、递归改权限/属主、kill -9、kubectl delete、
+journalctl --vacuum-*。
+语义边界：Destructive=false 只意味着「没命中已知规则」，**不意味着安全**；
+是否二次确认是调用方的策略决定，本包给的是「这条命令不可逆」这个事实。
+门禁自检：go build ✅ / go vet ✅ / go test -race ✅ 5 包全绿 /
+go mod tidy -diff ✅ / gofmt ✅ / golangci-lint 0 issues ✅。
+反证样本——不跑不可逆扫描 4 条红；不认联合短 flag 4 条红；
+命中规则表就算不可逆（不看 flag）3 条红。
+
+- 杂务(deps)：依赖地板追平——guardx v0.17.0 / concurrency v0.22.1 / logx v0.7.2 / pkg v0.29.1
+
+矩阵的**发版时刻地板门禁**（`verify_tag_floor`）要求：打 tag 那一刻的依赖地板
+必须是当时的最新。本仓四条地板都落后了（guardx v0.15.0→v0.17.0、
+concurrency v0.22.0→v0.22.1、logx v0.7.1→v0.7.2、pkg v0.28.0→v0.29.1）
+⇒ 不抬地板就打不出 tag（tag 受 `protect-tags` 保护**不可重打**）。
+guardx v0.17.0 含本仓要用的 `logredact` 载荷裁剪档与 `invoke.Outcome` 第三格
+——都是**纯增量** API，既有调用点逐字编译通过。
+门禁自检：go build ✅ / go vet ✅ / go test -race ✅ 5 包全绿 /
+go mod tidy -diff ✅ / gofmt ✅。
+
+- 杂务(deps)：依赖地板追平上游本轮新版本——textx v0.7.1
+
+本仓 HEAD 的依赖地板已落后于 textx 的最新版本（`verify_tag_floor.py --org oagentkit --ref HEAD` 判红）。
+本仓一旦发版，就会把落后地板发出去——而 tag 受 protect-tags ruleset 保护、打完不能重打，
+只能靠后续版本补齐。
+本版只抬依赖地板，不改任何行为：
+- github.com/oagentkit/textx v0.6.2 → v0.7.1
+对应 issue matrix-tools#143。
+
+- 杂务(deps)：依赖地板追平上游本轮新版本——github.com/oagentkit/guardx@v0.15.0、github.com/oekit/concurrency@v0.22.0、github.com/oekit/pkg@v0.28.0
+
+本仓 HEAD 的依赖地板已落后于各依赖的最新版本（`verify_tag_floor.py --org oagentkit --ref HEAD` 判红）。
+本仓一旦发版，就会把落后地板发出去——而 tag 受 protect-tags ruleset 保护、打完不能重打，
+只能靠后续版本补齐。
+本版只抬依赖地板，不改任何行为：
+- github.com/oagentkit/guardx → v0.15.0
+- github.com/oekit/concurrency → v0.22.0
+- github.com/oekit/pkg → v0.28.0
+对应 issue matrix-tools#143。
+
+
+- 文档(tools)：刷正 README 的外部依赖清单 —— 与 go.mod 实测对账
+
+本仓 README 的「外部依赖」清单与**各仓 go.mod 的事实**对不上。
+矩阵的单一数据源 `matrix-tools/modules.json` 也有同样漂移，已在
+[matrix-tools#126](https://github.com/oagentkit/matrix-tools/pull/126) 同步刷正。
+## 现状核实
+```bash
+$ grep -v indirect tools/go.mod | grep -E "^\s+[a-z].*/"
+	github.com/cloudwego/eino v0.9.21
+	...
+	mvdan.cc/sh/v3 v3.13.1
+```
+⇒ 第三方直接依赖是 **2 个**（eino、**mvdan.cc/sh/v3**），本仓 README 只列了 1 个。
+## 影响
+`mvdan.cc/sh/v3` 是 shell 解析器（带 `x/sys` 等传递依赖）。漏列 ⇒ 读者低估依赖面。
+## 改动
+**只改清单那一行（`- `github.com/cloudwego/eino`` ⇒ 多一行 `- `mvdan.cc/sh/v3``）**，其余段落逐字未动。
+## 验收
+- [x] 清单与 `go.mod` 实测一致
+- [x] 与 `matrix-tools/modules.json` 的登记一致（同期在 matrix-tools#126 刷正）
+- [x] **纯 .md 改动** ⇒ 不需要 CHANGELOG 条目、不打 tag、不发版（无发版步骤）
+关联 oagentkit/matrix-tools#125
+
+
 ## [v0.10.4] — 2026-10-23
 
 - 杂务(deps)：依赖地板跟到上游本轮新版本——guardx v0.14.0 concurrency v0.20.2 pkg v0.22.0
