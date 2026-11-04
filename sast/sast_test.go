@@ -9,12 +9,8 @@ import (
 	"time"
 
 	"github.com/oagentkit/textx/reportutil"
+	"github.com/oekit/logx"
 )
-
-type nopLogger struct{}
-
-func (nopLogger) Info(string, ...any) {}
-func (nopLogger) Warn(string, ...any) {}
 
 // fakeBin 写一个可执行 shell 脚本（测试专用 fake 工具）。
 func fakeBin(t *testing.T, dir, name, body string) string {
@@ -50,7 +46,7 @@ done
 exit 0
 `)
 	results := Scan(context.Background(),
-		Config{GitleaksBin: bin, Timeout: 30 * time.Second}, dir, "main", nil, nopLogger{})
+		Config{GitleaksBin: bin, Timeout: 30 * time.Second}, dir, "main", nil, logx.Nop())
 	if len(results) != 1 {
 		t.Fatalf("应产出 1 个结果: %d", len(results))
 	}
@@ -77,7 +73,7 @@ func TestSemgrepScan(t *testing.T) {
 	bin := fakeBin(t, dir, "semgrep", `printf '%s' '{"results":[{"check_id":"go.lang.correct","path":"internal/x/a.go","start":{"line":7,"col":1},"extra":{"severity":"WARNING","message":"err not checked"}}]}'`)
 	results := Scan(context.Background(),
 		Config{SemgrepBin: bin, SemgrepConfig: "p/go", Timeout: 30 * time.Second},
-		dir, "", []string{"internal/x/a.go", "internal/x/b.go"}, nopLogger{})
+		dir, "", []string{"internal/x/a.go", "internal/x/b.go"}, logx.Nop())
 	if len(results) != 1 || results[0].Err != nil {
 		t.Fatalf("results = %+v", results)
 	}
@@ -113,7 +109,7 @@ func TestSemgrepNoConfigSkipped(t *testing.T) {
 	dir := t.TempDir()
 	bin := fakeBin(t, dir, "semgrep", `exit 0`)
 	results := Scan(context.Background(),
-		Config{SemgrepBin: bin, Timeout: 30 * time.Second}, dir, "", nil, nopLogger{})
+		Config{SemgrepBin: bin, Timeout: 30 * time.Second}, dir, "", nil, logx.Nop())
 	if len(results) != 0 {
 		t.Fatalf("未配 config 不应产出结果: %+v", results)
 	}
@@ -123,7 +119,7 @@ func TestToolFailure(t *testing.T) {
 	dir := t.TempDir()
 	bin := fakeBin(t, dir, "gitleaks", `echo "boom" >&2; exit 1`)
 	results := Scan(context.Background(),
-		Config{GitleaksBin: bin, Timeout: 30 * time.Second}, dir, "main", nil, nopLogger{})
+		Config{GitleaksBin: bin, Timeout: 30 * time.Second}, dir, "main", nil, logx.Nop())
 	if len(results) != 1 || results[0].Err == nil {
 		t.Fatalf("失败应产出带 Err 的结果: %+v", results)
 	}
@@ -145,7 +141,7 @@ done
 exit 0
 `, "@JSON@", json))
 	results := Scan(context.Background(),
-		Config{GitleaksBin: bin, Timeout: 30 * time.Second}, dir, "", nil, nopLogger{})
+		Config{GitleaksBin: bin, Timeout: 30 * time.Second}, dir, "", nil, logx.Nop())
 	if len(results) != 1 {
 		t.Fatalf("results = %d", len(results))
 	}
@@ -183,7 +179,7 @@ done
 exit 0
 `)
 	results := Scan(context.Background(),
-		Config{GitleaksBin: bin, Timeout: 30 * time.Second}, dir, "", nil, nopLogger{})
+		Config{GitleaksBin: bin, Timeout: 30 * time.Second}, dir, "", nil, logx.Nop())
 	if len(results) != 1 || results[0].Err != nil || len(results[0].Findings) != 0 {
 		t.Fatalf("干净报告应产出空 findings: %+v", results)
 	}
