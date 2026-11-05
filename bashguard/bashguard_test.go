@@ -347,7 +347,7 @@ func TestTimeKeywordReadable(t *testing.T) {
 // TestAllCallsFullAST 全 AST 调用集（tools#35）：Invocations 是判定路径的
 // 消费序列（首个非只读调用提前返回 ⇒ 其后的调用不在列），AllCalls 是风险面
 // 的事实全集——管道后半 / 命令替换 / 子 shell 里的调用对确认门禁必须可见
-//（jumpserver-kit 实弹：sudo -n rm -rf 曾在包装调用面无声绕过）。
+// （jumpserver-kit 实弹：sudo -n rm -rf 曾在包装调用面无声绕过）。
 func TestAllCallsFullAST(t *testing.T) {
 	cases := []struct {
 		cmd  string
