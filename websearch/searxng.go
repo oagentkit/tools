@@ -93,7 +93,7 @@ type searchIn struct {
 // AsTool 把检索包成 web_search 工具。
 //
 // ⚠️ panic 契约（oagentkit/rag#31 同族对齐）：schema 反射构造失败时 panic
-//（接口签名无 error 通道，「静态 schema 即编程错误」在此升级为显式 API
+// （接口签名无 error 通道，「静态 schema 即编程错误」在此升级为显式 API
 // 契约声明）。
 func (s *Searxng) AsTool() tool.BaseTool {
 	t, err := utils.InferTool("web_search",
