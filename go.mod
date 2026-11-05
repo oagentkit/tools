@@ -9,8 +9,8 @@ require (
 	github.com/oagentkit/guardx v0.18.0
 	github.com/oagentkit/runtime v0.7.3
 	github.com/oagentkit/textx v0.8.0
-	github.com/oekit/concurrency v0.24.0
-	github.com/oekit/logx v0.8.2
+	github.com/oekit/concurrency v0.25.1
+	github.com/oekit/logx v0.8.3
 	github.com/oekit/pkg v0.34.1
 )
 
