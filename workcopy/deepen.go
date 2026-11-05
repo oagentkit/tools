@@ -29,13 +29,46 @@ import (
 // fullRefspec 显式全量 refspec（--single-branch 克隆下唯一可靠的补全入口）。
 const fullRefspec = "+refs/heads/*:refs/remotes/origin/*"
 
-// deepenStart / maxDeepenRounds 指数加深参数：64 起步逐轮 ×2，8 轮覆盖 8k+
-// 提交；真实上限由时间预算兜底——大仓耗尽预算即报错降级（审查主链路不阻断）。
+// deepenStart / maxDeepenRounds / probeTimeout 指数加深参数缺省值：64 起步
+// 逐轮 ×2，8 轮覆盖 8k+ 提交；真实上限由时间预算兜底——大仓耗尽预算即报错
+// 降级（审查主链路不阻断）。要按仓规模调整（单体大仓放宽轮数、CI 紧张收紧）
+// 用 DeepenOptions + EnsureMergeBaseOpts（oagentkit/tools#36）。
 const (
 	deepenStart     = 64
 	maxDeepenRounds = 8
 	probeTimeout    = 30 * time.Second
 )
+
+// DeepenOptions 加深循环的可调参数（零值字段取包级缺省）。
+type DeepenOptions struct {
+	// StartDepth 起步加深层数（--deepen=<N> 首轮值；缺省 64）。
+	StartDepth int
+	// MaxRounds 加深轮数上限（每轮层数 ×2；缺省 8）。
+	MaxRounds int
+	// ProbeTimeout 单轮 merge-base 探测超时（缺省 30s）。
+	ProbeTimeout time.Duration
+}
+
+func (o DeepenOptions) startDepth() int {
+	if o.StartDepth > 0 {
+		return o.StartDepth
+	}
+	return deepenStart
+}
+
+func (o DeepenOptions) maxRounds() int {
+	if o.MaxRounds > 0 {
+		return o.MaxRounds
+	}
+	return maxDeepenRounds
+}
+
+func (o DeepenOptions) probeTimeout() time.Duration {
+	if o.ProbeTimeout > 0 {
+		return o.ProbeTimeout
+	}
+	return probeTimeout
+}
 
 // EnsureMergeBase 确保 origin/<baseBranch> 与 HEAD 的 merge-base 可达。
 //   - 探测通过（完整克隆、已补全、或 base 与 head 重合等价场景）零 fetch 返回；
@@ -46,7 +79,7 @@ const (
 //   - 加深轮失败/预算耗尽仍不可达 → 报错降级。整条消息过 logredact（git 传输
 //     失败回显带凭证 clone URL——ocrshim 通道此错误经 MCP 原样回传 argus）。
 func EnsureMergeBase(ctx context.Context, dir, baseBranch string, timeout time.Duration) error {
-	return ensureMergeBase(ctx, dir, baseBranch, timeout, false)
+	return ensureMergeBase(ctx, dir, baseBranch, timeout, false, DeepenOptions{})
 }
 
 // EnsureMergeBaseTLS EnsureMergeBase 的 TLS 形态：insecureTLS=true 时对 deepen
@@ -54,10 +87,18 @@ func EnsureMergeBase(ctx context.Context, dir, baseBranch string, timeout time.D
 // clone/PR fetch 均走该环境，deepen fetch 漏注会让补全在此类平台确定性失败
 // 且静默降级丢失 range 审查；第八轮审计 C 级修复）。
 func EnsureMergeBaseTLS(ctx context.Context, dir, baseBranch string, timeout time.Duration, insecureTLS bool) error {
-	return ensureMergeBase(ctx, dir, baseBranch, timeout, insecureTLS)
+	return ensureMergeBase(ctx, dir, baseBranch, timeout, insecureTLS, DeepenOptions{})
 }
 
-func ensureMergeBase(ctx context.Context, dir, baseBranch string, timeout time.Duration, insecureTLS bool) error {
+// EnsureMergeBaseOpts EnsureMergeBase 的参数化形态（oagentkit/tools#36）：
+// DeepenOptions 调起步层数/轮数上限/单轮探测超时——单体大仓放宽（万级提交
+// 8 轮可能不够）、CI 资源紧张的宿主收紧；零值字段取包级缺省。整体时间预算
+// 仍由 timeout 统一兜底。
+func EnsureMergeBaseOpts(ctx context.Context, dir, baseBranch string, timeout time.Duration, opts DeepenOptions) error {
+	return ensureMergeBase(ctx, dir, baseBranch, timeout, false, opts)
+}
+
+func ensureMergeBase(ctx context.Context, dir, baseBranch string, timeout time.Duration, insecureTLS bool, opts DeepenOptions) error {
 	if baseBranch == "" {
 		return errors.New("gitdeepen: 缺少 base 分支")
 	}
@@ -67,13 +108,13 @@ func ensureMergeBase(ctx context.Context, dir, baseBranch string, timeout time.D
 	deadline := time.Now().Add(timeout)
 	base := "origin/" + baseBranch
 
-	if probeMergeBase(ctx, dir, base) {
+	if probeMergeBase(ctx, dir, base, opts.probeTimeout()) {
 		return nil
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".git", "shallow")); err != nil {
 		return nil // 完整克隆：merge-base 失败非浅历史问题
 	}
-	for i := 0; i < maxDeepenRounds; i++ {
+	for i := 0; i < opts.maxRounds(); i++ {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			break
@@ -81,7 +122,7 @@ func ensureMergeBase(ctx context.Context, dir, baseBranch string, timeout time.D
 		fetchReq := procx.RunRequest{
 			Argv: []string{
 				"git", "-C", dir, "fetch",
-				"--deepen=" + strconv.Itoa(deepenStart<<i),
+				"--deepen=" + strconv.Itoa(opts.startDepth()<<i),
 				"origin", fullRefspec,
 			},
 			Timeout: remaining,
@@ -93,21 +134,21 @@ func ensureMergeBase(ctx context.Context, dir, baseBranch string, timeout time.D
 			return errors.New(logredact.Redact(fmt.Sprintf(
 				"浅克隆加深失败（git fetch --deepen）: %v；stderr: %s", err, tail(stderr, 400))))
 		}
-		if probeMergeBase(ctx, dir, base) {
+		if probeMergeBase(ctx, dir, base, opts.probeTimeout()) {
 			return nil
 		}
 	}
 	return errors.New(logredact.Redact(fmt.Sprintf(
 		"浅克隆加深后 merge-base 仍不可达（origin/%s ↔ HEAD，%s 内 deepen %d 轮）——OCR range 审查降级",
-		baseBranch, timeout.Round(time.Second), maxDeepenRounds)))
+		baseBranch, timeout.Round(time.Second), opts.maxRounds())))
 }
 
 // probeMergeBase 本地探测 merge-base 可达（无网络 IO，秒级）。exit 非零一律视为
 // 不可达（含 base 远端引用不存在——由后续 deepen 轮经全量 refspec 创建）。
-func probeMergeBase(ctx context.Context, dir, base string) bool {
+func probeMergeBase(ctx context.Context, dir, base string, timeout time.Duration) bool {
 	_, _, _, err := procx.Run(ctx, procx.RunRequest{
 		Argv:    []string{"git", "-C", dir, "merge-base", base, "HEAD"},
-		Timeout: probeTimeout,
+		Timeout: timeout,
 	})
 	return err == nil
 }

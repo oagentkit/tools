@@ -109,7 +109,68 @@ type Decision struct {
 	// DestructiveReason 不可逆依据（人可读，审计用）；未命中时为空。
 	DestructiveReason string
 	// Invocations 提取的调用序列（观测/风险面）。
+	//
+	// ⚠️ 这是**判定路径**的消费序列，不是全量事实：判定在首个非只读调用上
+	// 提前返回（Analyze 的 break），其后的调用不再评估；包装剥壳后判定的是
+	// 内核，调用面记录的是包装（sudo -n rm 只见 sudo）。做确认门禁/风险审计
+	// 请用 AllCalls（见其注释）。
 	Invocations []Invocation
+	// AllCalls 全 AST 的 simple command 集合（syntax.Walk，oagentkit/tools#35）：
+	// 管道后半、命令替换 $(…)、子 shell (…)、{ …; } 里的调用**全部可见**，
+	// 与判定路径是否提前返回无关。
+	//
+	// 与 Invocations 的分工：Invocations 服务 ReadOnly/Destructive 判定的
+	// 归因（为何判非只读）；AllCalls 服务「这条命令文本里**出现了什么**」的
+	// 风险面事实——jumpserver-kit 此前为补这个集合在守卫层自接了一份
+	// syntax.Walk（判定门禁的绕过全堵上依赖它），重复实现会漂、漂的那份
+	// 决定门禁拦什么，故上游收编。
+	//
+	// 语义边界（调用方须知）：
+	//   - 包装不剥壳：sudo -n rm -rf /x 是一条调用（sudo，args 含 rm…）——
+	//     sudo/xargs/env 的内核是**参数**不是语法调用，消费方按需自剥；
+	//   - eval "rm -rf /x" 的 rm 是字符串数据不是语法调用，只见 eval；
+	//   - Dynamic=true 的调用（参数含 $()/反引号/$VAR）同样入列——动态参数
+	//     本身就是风险信号。
+	AllCalls []Invocation
+}
+
+// collectAllCalls 全 AST 收集 simple command（syntax.Walk，f 为 nil 返回空）。
+func collectAllCalls(f *mvdan.File) []Invocation {
+	if f == nil {
+		return nil
+	}
+	var out []Invocation
+	mvdan.Walk(f, func(n mvdan.Node) bool {
+		call, ok := n.(*mvdan.CallExpr)
+		if !ok {
+			return true // 继续下探
+		}
+		dynamic := false
+		for _, a := range call.Assigns {
+			if a.Value == nil {
+				continue
+			}
+			if _, dyn := literalWord(a.Value); dyn {
+				dynamic = true
+			}
+		}
+		name := ""
+		argv := make([]string, 0, len(call.Args))
+		for i, w := range call.Args {
+			s, dyn := literalWord(w)
+			if dyn {
+				dynamic = true
+			}
+			if i == 0 {
+				name = s
+				continue
+			}
+			argv = append(argv, s)
+		}
+		out = append(out, Invocation{Name: name, Args: argv, Dynamic: dynamic})
+		return true // 继续下探：参数词里可有命令替换 $(cmd)（内层调用是独立 CallExpr）
+	})
+	return out
 }
 
 // Analyze 静态解析与判定。超长/解析失败返回非只读（保守）。
@@ -125,7 +186,7 @@ func Analyze(cmdStr string, t *Table) Decision {
 	if err != nil {
 		return Decision{Reason: fmt.Sprintf("解析失败: %v", err)}
 	}
-	d := Decision{ReadOnly: true}
+	d := Decision{ReadOnly: true, AllCalls: collectAllCalls(f)}
 	for _, stmt := range f.Stmts {
 		if reason := t.evalStmt(stmt, &d.Invocations); reason != "" {
 			d.ReadOnly = false

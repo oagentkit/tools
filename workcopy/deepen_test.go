@@ -150,3 +150,41 @@ func TestEnsureMergeBaseRequiresBaseBranch(t *testing.T) {
 func shq(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
+
+// DeepenOptions 参数化（tools#36）：起步层数/轮数上限按仓规模可调——大仓放宽
+// 到 16 轮、CI 紧张收紧到 2 轮 + 小起步；零值取包级缺省（零破坏）。
+func TestEnsureMergeBaseOptsCustomRounds(t *testing.T) {
+	probe := fakeGit(t, 1<<20, false) // merge-base 永不成功
+	err := EnsureMergeBaseOpts(context.Background(), shallowDir(t), "main", 10*time.Second,
+		DeepenOptions{StartDepth: 512, MaxRounds: 2})
+	if err == nil {
+		t.Fatal("预算耗尽应报错降级")
+	}
+	argv := readArgv(t, probe)
+	for _, want := range []string{"--deepen=512", "--deepen=1024"} {
+		if !strings.Contains(argv, want) {
+			t.Fatalf("argv 缺 %s: %s", want, argv)
+		}
+	}
+	if strings.Contains(argv, "--deepen=2048") {
+		t.Fatalf("MaxRounds=2 应止步第二轮: %s", argv)
+	}
+	if !strings.Contains(err.Error(), "2 轮") {
+		t.Fatalf("错误应报告实际轮数: %v", err)
+	}
+}
+
+// 缺省参数与 EnsureMergeBase 同语义（零值字段取包级缺省：64 起步 / 8 轮）。
+func TestEnsureMergeBaseOptsDefaults(t *testing.T) {
+	probe := fakeGit(t, 2, false)
+	if err := EnsureMergeBaseOpts(context.Background(), shallowDir(t), "main", 10*time.Second, DeepenOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	argv := readArgv(t, probe)
+	if !strings.Contains(argv, "--deepen=64") {
+		t.Fatalf("零值 Options 应取缺省起步 64: %s", argv)
+	}
+	if strings.Contains(argv, "--deepen=128") {
+		t.Fatalf("一轮收敛后不得继续加深: %s", argv)
+	}
+}
