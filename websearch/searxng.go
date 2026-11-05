@@ -90,6 +90,11 @@ type searchIn struct {
 }
 
 // AsTool 把检索包成 web_search 内置工具（与 rag.AsTool 同形态）。
+// AsTool 把检索包成 web_search 工具。
+//
+// ⚠️ panic 契约（oagentkit/rag#31 同族对齐）：schema 反射构造失败时 panic
+// （接口签名无 error 通道，「静态 schema 即编程错误」在此升级为显式 API
+// 契约声明）。
 func (s *Searxng) AsTool() tool.BaseTool {
 	t, err := utils.InferTool("web_search",
 		"检索公开资料（SearXNG）。返回按相关度排序的结果列表（标题/URL/摘要）。用于概念、方法论类问题的事实核查。",
@@ -110,7 +115,7 @@ func (s *Searxng) AsTool() tool.BaseTool {
 			return b.String(), nil
 		})
 	if err != nil {
-		panic(fmt.Sprintf("searxng: 构建 web_search 工具失败: %v", err)) // 静态 schema，构造失败即编程错误
+		panic(fmt.Sprintf("searxng: 构建 web_search 工具失败: %v", err)) // panic 契约见 AsTool doc（rag#31 同族对齐）
 	}
 	return t
 }
