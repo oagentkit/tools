@@ -14,6 +14,15 @@ go get github.com/oagentkit/tools
 | `sast` | 确定性 SAST 前置扫描（不执行被扫代码） |
 | `bashguard` | Shell 命令静态风险裁决（自 `guardx/bashguard` 迁入 v0.10.0）：经真 shell AST 判定只读性，**不执行命令** |
 
+**bashguard 作为命令黑名单判定底座**（oagentkit/tools#38）：下游自持正则黑名单
+（`rm -rf` / `mkfs` / `shutdown` 一族的整串锚点）会把**引号内的字面量**误杀
+（实弹：`grep -iE 'sleep|shutdown'` 被整串锚点判定为含 shutdown，两轮全量评测
+连环失败）；AST 判定不会把引号内字面量当命令名，新增危险命令是**表驱动数据
+变更**而非正则修炼（`Table.Destructive` 三判据：恒不可逆命令 / 危险 flag / 危险
+参数前缀，「多报不漏报」哲学）。迁移建议：`bashguard.Analyze` 的
+`Decision.Destructive` 作底座，下游补充规则以追加策略表/复核 `AllCalls`
+（全 AST 调用集）的方式叠加，正则族逐步退役。
+
 ## 定位
 
 **tier 2** — 集成层，依赖 tier0/tier1 + 重第三方地板。

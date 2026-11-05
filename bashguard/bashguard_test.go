@@ -343,3 +343,67 @@ func TestTimeKeywordReadable(t *testing.T) {
 		t.Fatal("time rm 应随内核命令判非只读")
 	}
 }
+
+// TestAllCallsFullAST 全 AST 调用集（tools#35）：Invocations 是判定路径的
+// 消费序列（首个非只读调用提前返回 ⇒ 其后的调用不在列），AllCalls 是风险面
+// 的事实全集——管道后半 / 命令替换 / 子 shell 里的调用对确认门禁必须可见
+// （jumpserver-kit 实弹：sudo -n rm -rf 曾在包装调用面无声绕过）。
+func TestAllCallsFullAST(t *testing.T) {
+	cases := []struct {
+		cmd  string
+		want []string
+	}{
+		{"true | rm -rf /x", []string{"true", "rm"}},
+		{"echo $(rm -rf /x)", []string{"echo", "rm"}},
+		{"cat < <(rm -rf /x)", []string{"cat", "rm"}},
+		{"ls && rm -rf /x", []string{"ls", "rm"}},
+		{"(rm -rf /x)", []string{"rm"}},
+		{"{ rm -rf /x; }", []string{"rm"}},
+		{"rm -rf /x", []string{"rm"}},
+		// 包装不剥壳：sudo 的内核是参数不是语法调用（语义边界见 Decision.AllCalls 注释）
+		{"sudo -n rm -rf /x", []string{"sudo"}},
+		// eval 的字符串是数据不是语法调用
+		{`eval "rm -rf /x"`, []string{"eval"}},
+	}
+	for _, c := range cases {
+		d := Analyze(c.cmd, nil)
+		var got []string
+		for _, inv := range d.AllCalls {
+			got = append(got, inv.Name)
+		}
+		if len(got) != len(c.want) {
+			t.Fatalf("Analyze(%q).AllCalls = %v, want %v", c.cmd, got, c.want)
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Fatalf("Analyze(%q).AllCalls = %v, want %v", c.cmd, got, c.want)
+			}
+		}
+	}
+}
+
+// TestAllCallsDynamicFlag 动态参数的调用入列且带 Dynamic 标记——动态本身就是
+// 风险信号；内层命令替换里的调用照常收集。
+func TestAllCallsDynamicFlag(t *testing.T) {
+	d := Analyze("echo $(rm -rf /x)", nil)
+	if len(d.AllCalls) != 2 {
+		t.Fatalf("AllCalls 应含 echo 与内层 rm: %+v", d.AllCalls)
+	}
+	if !d.AllCalls[0].Dynamic {
+		t.Fatalf("echo 的参数含命令替换应标记 Dynamic: %+v", d.AllCalls[0])
+	}
+	if d.AllCalls[1].Name != "rm" || d.AllCalls[1].Dynamic {
+		t.Fatalf("内层 rm 应为字面调用: %+v", d.AllCalls[1])
+	}
+}
+
+// TestAllCallsReadOnlyPath 只读命令同样带全量 AllCalls（风险面与判定结论无关）。
+func TestAllCallsReadOnlyPath(t *testing.T) {
+	d := Analyze("ls -la && git status", nil)
+	if !d.ReadOnly {
+		t.Fatalf("应判只读: %s", d.Reason)
+	}
+	if len(d.AllCalls) != 2 || d.AllCalls[0].Name != "ls" || d.AllCalls[1].Name != "git" {
+		t.Fatalf("AllCalls: %+v", d.AllCalls)
+	}
+}
