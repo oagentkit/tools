@@ -2,6 +2,114 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.12.0] — 2026-11-06
+
+### 新增(bashguard,workcopy)：AllCalls 全 AST 调用集 + DeepenOptions 参数化
+
+* feat(bashguard,workcopy): AllCalls 全 AST 调用集 + DeepenOptions 参数化（#35 #36）
+tools#35——Decision.AllCalls（jumpserver-kit 实弹反哺）：
+- syntax.Walk 全 AST 收集 simple command：管道后半 / 命令替换 $(…) / 进程替换
+  <(…) / 子 shell / 花括号组里的调用全部可见，与判定路径是否提前返回无关
+- Invocations 补 ⚠️ 注释明确定性（判定路径消费序列：sudo -n rm 只见 sudo、
+  eval 字符串只见 eval），AllCalls 服务风险面事实（门禁/审计消费）
+- CallExpr 参数词继续下探（参数里可有命令替换，内层调用是独立 CallExpr）
+- 包装不剥壳的语义边界写进 doc：sudo/xargs/env 内核是参数不是语法调用
+tools#36——workcopy.DeepenOptions：
+- StartDepth / MaxRounds / ProbeTimeout 参数化（零值取包级缺省，零破坏）：
+  单体大仓放宽轮数、CI 紧张收紧；EnsureMergeBaseOpts 新入口，
+  EnsureMergeBase / EnsureMergeBaseTLS 走缺省不变
+- 耗尽报错带实际轮数（此前「预算耗尽」与「轮数上限耗尽」无从区分）
+tools#38——README 补「bashguard 作为命令黑名单判定底座」迁移说明
+（正则整串锚点误杀引号内字面量的实弹 + 表驱动数据变更哲学 + AllCalls 叠加口）。
+全仓 go build / vet / -race 绿；新增 6 个钉子测试。
+关联 oagentkit/tools#35 oagentkit/tools#36 oagentkit/tools#38
+* style(bashguard): gofmt 对齐追加测试块
+---------
+Co-authored-by: Murphy-Yi <zhangyi@Murphy-YideMac-Mini.local>
+
+- 杂务(deps)：依赖地板追到最新——github.com/oagentkit/guardx v0.19.0
+
+| 依赖 | 现地板 | 抬到 |
+|---|---|---|
+| `github.com/oagentkit/guardx` | `v0.18.0` | `v0.19.0` |
+| `github.com/oagentkit/runtime` | `v0.7.3` | `v0.8.0` |
+| `github.com/oagentkit/textx` | `v0.8.0` | `v0.9.0` |
+## 为什么
+矩阵的**发版时刻地板时效**门禁（`verify_tag_floor --ref HEAD`）要求：各仓 HEAD
+（= 下次发版会发出去的内容）的依赖地板，相对那一刻的依赖最新版本，不能已落后。
+oekit 基座与矩阵模块都在高频发版 ⇒ 地板是**跑步机**，落后一格就会判红。
+## 兼容性实测
+本工具在提交前跑完 `go build` / `go vet` / `go test -race -count=1 ./...`（全绿才提交）
+与 `go mod tidy -diff`（无漂移）⇒ 改动**只影响依赖版本**，零行为差异。
+只改 `go.mod` / `go.sum` ⇒ 不需要 CHANGELOG 条目（版本段由下次发版的 `prewrite` 生成）。
+Co-authored-by: Murphy-Yi <zhangyi@Murphy-YideMac-Mini.local>
+
+- 杂务(deps)：依赖地板追到最新——github.com/oekit/concurrency v0.25.1
+
+| 依赖 | 现地板 | 抬到 |
+|---|---|---|
+| `github.com/oekit/concurrency` | `v0.24.0` | `v0.25.1` |
+| `github.com/oekit/logx` | `v0.8.2` | `v0.8.3` |
+## 为什么
+矩阵的**发版时刻地板时效**门禁（`verify_tag_floor --ref HEAD`）要求：各仓 HEAD
+（= 下次发版会发出去的内容）的依赖地板，相对那一刻的依赖最新版本，不能已落后。
+oekit 基座与矩阵模块都在高频发版 ⇒ 地板是**跑步机**，落后一格就会判红。
+## 兼容性实测
+本工具在提交前跑完 `go build` / `go vet` / `go test -race -count=1 ./...`（全绿才提交）
+与 `go mod tidy -diff`（无漂移）⇒ 改动**只影响依赖版本**，零行为差异。
+只改 `go.mod` / `go.sum` ⇒ 不需要 CHANGELOG 条目（版本段由下次发版的 `prewrite` 生成）。
+Co-authored-by: Murphy-Yi <zhangyi@Murphy-YideMac-Mini.local>
+
+- 杂务(deps)：依赖地板追到最新——本轮新 tag（首轮 tidy 撞上新发版 proxy 延迟，重跑补完）
+
+Co-authored-by: Murphy-Yi <zhangyi@Murphy-YideMac-Mini.local>
+
+- 杂务(deps)：依赖地板追到最新——github.com/oekit/pkg v0.34.1
+
+| 依赖 | 现地板 | 抬到 |
+|---|---|---|
+| `github.com/oekit/pkg` | `v0.34.0` | `v0.34.1` |
+## 为什么
+矩阵的**发版时刻地板时效**门禁（`verify_tag_floor --ref HEAD`）要求：各仓 HEAD
+（= 下次发版会发出去的内容）的依赖地板，相对那一刻的依赖最新版本，不能已落后。
+oekit 基座与矩阵模块都在高频发版 ⇒ 地板是**跑步机**，落后一格就会判红。
+## 兼容性实测
+本工具在提交前跑完 `go build` / `go vet` / `go test -race -count=1 ./...`（全绿才提交）
+与 `go mod tidy -diff`（无漂移）⇒ 改动**只影响依赖版本**，零行为差异。
+只改 `go.mod` / `go.sum` ⇒ 不需要 CHANGELOG 条目（版本段由下次发版的 `prewrite` 生成）。
+Co-authored-by: Murphy-Yi <zhangyi@Murphy-YideMac-Mini.local>
+
+- 杂务(deps)：依赖地板追到最新——github.com/oagentkit/guardx v0.17.1
+
+| 依赖 | 现地板 | 抬到 |
+|---|---|---|
+| `github.com/oagentkit/guardx` | `v0.17.0` | `v0.17.1` |
+| `github.com/oagentkit/runtime` | `v0.7.2` | `v0.7.3` |
+| `github.com/oagentkit/textx` | `v0.7.1` | `v0.7.2` |
+| `github.com/oekit/concurrency` | `v0.23.3` | `v0.24.0` |
+| `github.com/oekit/pkg` | `v0.31.2` | `v0.34.0` |
+## 为什么
+矩阵的**发版时刻地板时效**门禁（`verify_tag_floor --ref HEAD`）要求：各仓 HEAD
+（= 下次发版会发出去的内容）的依赖地板，相对那一刻的依赖最新版本，不能已落后。
+oekit 基座与矩阵模块都在高频发版 ⇒ 地板是**跑步机**，落后一格就会判红。
+## 兼容性实测
+本工具在提交前跑完 `go build` / `go vet` / `go test -race -count=1 ./...`（全绿才提交）
+与 `go mod tidy -diff`（无漂移）⇒ 改动**只影响依赖版本**，零行为差异。
+只改 `go.mod` / `go.sum` ⇒ 不需要 CHANGELOG 条目（版本段由下次发版的 `prewrite` 生成）。
+Co-authored-by: Murphy-Yi <zhangyi@Murphy-YideMac-Mini.local>
+
+
+- 文档(websearch)：AsTool panic 契约显式声明（rag#31 同族）
+
+* docs(websearch): AsTool panic 契约显式声明（rag#31 同族对齐）
+「静态 schema 即编程错误」从内部注释升级为 API doc 契约——与 rag 同族
+问题（rag#31），接口签名无 error 通道时 panic 是唯一出路，但契约必须
+可见。
+* style: gofmt
+---------
+Co-authored-by: Murphy-Yi <zhangyi@Murphy-YideMac-Mini.local>
+
+
 ## [v0.11.1] — 2026-11-04
 
 - 杂务(deps)：依赖地板追到最新——github.com/oekit/concurrency v0.23.2
