@@ -3,8 +3,11 @@ package acpx
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os/exec"
 	"strings"
+	"syscall"
 
 	"github.com/oagentkit/runtime/procx"
 	"github.com/oagentkit/textx/textutil"
@@ -31,6 +34,27 @@ func stderrTail(stderr string) string {
 		return ""
 	}
 	return textutil.TruncEllipsis(strings.TrimRight(stderr, "\n"), 400)
+}
+
+// isInterruptedExec 中断类执行错判定（tools#46）：超时（procx.ErrTimeout）、
+// 调用方取消（procx.ErrCanceled）或子进程被信号杀死（外部 kill/OOM：
+// exec.ExitError 且 wait status 为信号终止）。这类错意味着「没跑完」——与
+// 「跑完了但退出码非零」（终态优先路径按协议终态处置）是两类语义：前者拿到的
+// 任何文本都只是部分输出，不得代理终态。
+func isInterruptedExec(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, procx.ErrTimeout) || errors.Is(err, procx.ErrCanceled) {
+		return true
+	}
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		if ws, ok := ee.Sys().(syscall.WaitStatus); ok {
+			return ws.Signaled()
+		}
+	}
+	return false
 }
 
 // fallbackResult 全文兜底结果：JSON/事件流不可用时把 stdout 整体当文本。

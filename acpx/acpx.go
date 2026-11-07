@@ -178,6 +178,11 @@ type RunResult struct {
 	// Stderr 子进程 stderr 尾巴（≤400 字节，rune 对齐；空 = 无输出）。成功
 	// 解析路径也有值——CLI 的告警/弃用提示走 stderr，transcript 排障需要。
 	Stderr string
+	// Interrupted 执行被中断（超时/调用方取消/被信号杀死，tools#46）：
+	// Text 只是**部分输出**、任务未完成，且返回值同时带非 nil error——
+	// kimi 形态（无协议终态事件）下部分文本不得代理终态。nil error 时恒为
+	// false；「正常完成但退出码非零」（终态优先路径）不算中断。
+	Interrupted bool
 }
 
 // validate 校验请求并填充缺省值。

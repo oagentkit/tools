@@ -55,8 +55,20 @@ func (k *Kimi) Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 	}
 
 	stdout, stderr, code, err := runCLI(ctx, req, argv, onLine)
+	// 中断类执行错（超时/取消/被信号杀死）不得因「收到过部分 assistant 消息」
+	// 被吞（tools#46）：kimi 没有协议终态事件，「收到过 assistant 消息」只是
+	// 弱代理——超时被杀时任务并未完成，半截文本曾被整体按成功返回（ExitCode
+	// 是被杀的值而非 0、error 却为 nil，消费方无从察觉）。err 如实上抛，
+	// 部分文本挂 RunResult（Interrupted=true）供排障。
+	if err != nil && isInterruptedExec(err) {
+		return &RunResult{
+			Text: lastAssistant, ExitCode: code, Raw: []byte(stdout),
+			Stderr: stderrTail(stderr), Interrupted: true,
+		}, err
+	}
 	// 终态优先（与 claude/codex/pi/mimo 同契约）：已收到 assistant 消息
-	//（agent 正常完成）但进程退出码非零时以结果为准，不丢文本
+	//（agent 正常完成）但进程退出码非零时以结果为准，不丢文本——该路径的
+	// err 是「跑完了但退出码非零」，不是中断
 	if err != nil && lastAssistant == "" {
 		return nil, err
 	}
