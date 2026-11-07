@@ -127,7 +127,9 @@ type Decision struct {
 	//
 	// 语义边界（调用方须知）：
 	//   - 包装不剥壳：sudo -n rm -rf /x 是一条调用（sudo，args 含 rm…）——
-	//     sudo/xargs/env 的内核是**参数**不是语法调用，消费方按需自剥；
+	//     sudo/xargs/env 的内核是**参数**不是语法调用，消费方按需自剥
+	//     （本包自身的不可逆扫描已对未注册调度器做内核兜底，见
+	//     destructive.go 的 destructiveKernel）；
 	//   - eval "rm -rf /x" 的 rm 是字符串数据不是语法调用，只见 eval；
 	//   - Dynamic=true 的调用（参数含 $()/反引号/$VAR）同样入列——动态参数
 	//     本身就是风险信号。
@@ -196,8 +198,11 @@ func Analyze(cmdStr string, t *Table) Decision {
 	}
 	// 不可逆判定**独立于**只读判定：命令被只读门拒了（rm 不在只读表），
 	// 它仍可能是不可逆的——而「这条命令不可逆」正是调用方要据此要二次确认的
-	// 那个事实。只读结论先出也不影响它。
-	if ok, why := t.destructiveScan(d.Invocations); ok {
+	// 那个事实。只读结论先出也不影响它。扫描面是**全量 AllCalls**（tools#44）：
+	// Invocations 是判定路径的消费序列，首个非只读语句即 break、其后的调用
+	// 不在列——曾用它扫不可逆，前置触礁语句（未知命令/写重定向/动态展开/
+	// 控制流）可稳定藏住后置的 rm -rf /。
+	if ok, why := t.destructiveScan(d.AllCalls); ok {
 		d.Destructive = true
 		d.DestructiveReason = why
 	}
