@@ -216,6 +216,36 @@ func TestEnsureRejectsOptionBranch(t *testing.T) {
 	}
 }
 
+// TestEnsureRejectsInjectedPRNumber 回归（tools#47）：Number 与 DefaultBranch
+// 同样进 git refspec（refs/pull/<N>/head）——含 ":" 可构造 src:dst 形态
+// （refs/pull/1/head:refs/heads/x/head），git fetch 会把它当 refspec 在沙箱
+// 克隆内写本地引用。DefaultBranch 有引用名卫生而 Number 没有（两行守卫只写
+// 一行），补齐纯数字白名单：prepare 与 refresh 两条 refspec 路径都在 Ensure
+// 入口被同一道守卫拦下。
+func TestEnsureRejectsInjectedPRNumber(t *testing.T) {
+	p := newTestPool(t, "")
+	p.CredentialOf = func(string) (string, string, bool) { return "https://git.example.com", "x", true }
+
+	for _, number := range []string{
+		"1/head:refs/heads/x", // 冒号注入 src:dst 形态
+		"",                    // 空号
+		"-1",                  // 选项形态
+		"1;rm -rf /",          // 分号（无 shell 面也一并拒）
+		"../evil",             // 路径形态
+	} {
+		_, err := p.Ensure(context.Background(), WorktreeKey{
+			Platform: "gitea", Owner: "o", Repo: "r", Number: number,
+			HeadSHA: "x", DefaultBranch: "main",
+		})
+		if err == nil || !strings.Contains(err.Error(), "非法 PR 号") {
+			t.Errorf("Number=%q 应被拒绝: %v", number, err)
+		}
+	}
+	if es, _ := os.ReadDir(p.Root); len(es) != 0 {
+		t.Fatalf("拒绝路径不应产生沙箱目录: %v", es)
+	}
+}
+
 func TestEnsureMissingHeadSHA(t *testing.T) {
 	fixture := makeFixtureRepo(t)
 	p := newTestPool(t, fixture)

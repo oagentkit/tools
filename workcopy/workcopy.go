@@ -78,6 +78,15 @@ func (p *Pool) Ensure(ctx context.Context, key WorktreeKey) (string, error) {
 	if key.HeadSHA == "" {
 		return "", fmt.Errorf("workcopy: PR %s/%s#%s 无 head SHA", key.Owner, key.Repo, key.Number)
 	}
+	// Number 同样进 git refspec（refs/pull/<N>/head）：非纯数字（如
+	// "1/head:refs/heads/x"）可拼出 src:dst 形态（refs/pull/1/head:refs/heads/
+	// x/head），git fetch 会把它当 refspec 在沙箱克隆内写本地引用——与
+	// DefaultBranch 的引用名卫生同一防线，此前两行守卫只写了一行（tools#47）。
+	// 无 shell 注入面（argv 直传），危害限于克隆内引用伪造，但守卫必须齐。
+	// GitHub/GitLab/Gitea 的 PR/MR 号均为十进制，纯数字白名单即合法形态全集。
+	if !isPrNumber(key.Number) {
+		return "", fmt.Errorf("workcopy: 非法 PR 号 %q（须为纯数字）", key.Number)
+	}
 
 	k := key.String()
 	if dir, ok := p.hitExisting(k); ok {
@@ -220,6 +229,20 @@ func prRefspec(platform, number string) string {
 	default:
 		return fmt.Sprintf("refs/pull/%s/head", number)
 	}
+}
+
+// isPrNumber PR 号形态守卫：非空纯数字（三大平台的 PR/MR 号都是十进制）。
+// prepare 与 refresh 两条路径的 refspec 都由 Ensure 入口的这道守卫覆盖。
+func isPrNumber(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func cloneURL(baseURL, owner, repo, token string) string {

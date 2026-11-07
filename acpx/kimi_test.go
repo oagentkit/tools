@@ -2,10 +2,14 @@ package acpx
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/oagentkit/runtime/procx"
 )
 
 func TestKimiStreamJSON(t *testing.T) {
@@ -90,5 +94,46 @@ exit 2
 	}
 	if res.Text != "kimi 部分完成" || res.ExitCode != 2 {
 		t.Fatalf("res: %+v", res)
+	}
+}
+
+// TestKimiInterruptedPropagatesError 回归（tools#46）：超时被杀但被杀前吐过
+// assistant 消息——err 曾被吞、整体按成功返回（ExitCode 非 0 而 error 为 nil，
+// 调用方拿半截任务文本无从察觉）。中断类执行错现在如实上抛，部分文本挂
+// RunResult 且 Interrupted=true；「跑完了但退出码非零」的终态优先路径
+// （TestKimiExitNonZeroWithResult）不受影响。
+func TestKimiInterruptedPropagatesError(t *testing.T) {
+	bin := fakeCLI(t, `echo '{"role":"assistant","content":"半截任务的部分输出"}'
+sleep 30`)
+	k := NewKimi()
+	k.Bin = bin
+
+	res, err := k.Run(context.Background(), RunRequest{Prompt: "x", Timeout: 300 * time.Millisecond})
+	if err == nil {
+		t.Fatal("超时被杀不得因有部分文本而当成功返回")
+	}
+	if !errors.Is(err, procx.ErrTimeout) {
+		t.Fatalf("超时应可 errors.Is 分类: %v", err)
+	}
+	if res == nil || res.Text != "半截任务的部分输出" || !res.Interrupted {
+		t.Fatalf("部分文本应挂 RunResult 且 Interrupted=true: %+v", res)
+	}
+}
+
+// TestKimiSignalKillPropagatesError 信号杀死（非超时路径）同样不得当成功：
+// 外部 kill/OOM 的 ExitError 信号形态也是「没跑完」。
+func TestKimiSignalKillPropagatesError(t *testing.T) {
+	bin := fakeCLI(t, `echo '{"role":"assistant","content":"被杀前的部分输出"}'
+kill -TERM $$
+`)
+	k := NewKimi()
+	k.Bin = bin
+
+	res, err := k.Run(context.Background(), RunRequest{Prompt: "x", Timeout: 30 * time.Second})
+	if err == nil {
+		t.Fatal("信号杀死不得当成功返回")
+	}
+	if res == nil || !res.Interrupted || res.Text != "被杀前的部分输出" {
+		t.Fatalf("部分文本应挂 RunResult 且 Interrupted=true: %+v", res)
 	}
 }

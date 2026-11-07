@@ -13,6 +13,7 @@ import (
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
 
+	"github.com/oagentkit/guardx/fence"
 	"github.com/oekit/pkg/httpjson"
 )
 
@@ -92,6 +93,10 @@ type searchIn struct {
 // AsTool 把检索包成 web_search 内置工具（与 rag.AsTool 同形态）。
 // AsTool 把检索包成 web_search 工具。
 //
+// 结果拼接前 Title/Snippet 过 fence.EscapeUntrusted（tools#49）：检索结果是
+// 半可信外网内容（敌意等级高于仓库内内容），未经消毒拼进编号列表会被
+// snippet 内嵌换行伪造条目与指令。
+//
 // ⚠️ panic 契约（oagentkit/rag#31 同族对齐）：schema 反射构造失败时 panic
 // （接口签名无 error 通道，「静态 schema 即编程错误」在此升级为显式 API
 // 契约声明）。
@@ -108,9 +113,17 @@ func (s *Searxng) AsTool() tool.BaseTool {
 			if len(results) == 0 {
 				return "未检索到相关公开资料。", nil
 			}
+			// Title/Snippet 是攻击者可影响的外网内容（SEO 投毒/被抓取页面），
+			// 注入 agent 提示词前必须过结构化消毒（tools#49，对齐 skillkit#34
+			// 的同威胁模型口径）：输出是「N. 标题\n URL\n 摘要」的编号列表文本，
+			// snippet 内嵌换行即可伪造编号条目与真实 URL 并列、夹带伪指令。
+			// Title 先折叠单行再消毒（skillkit#34 同款）；URL 是承重声明保留
+			// 原样——消毒中和结构不删内容。
 			var b strings.Builder
 			for i, r := range results {
-				b.WriteString(strconv.Itoa(i+1) + ". " + r.Title + "\n   " + r.URL + "\n   " + r.Snippet + "\n\n")
+				b.WriteString(strconv.Itoa(i+1) + ". " +
+					fence.EscapeUntrusted(strings.Join(strings.Fields(r.Title), " ")) +
+					"\n   " + r.URL + "\n   " + fence.EscapeUntrusted(r.Snippet) + "\n\n")
 			}
 			return b.String(), nil
 		})

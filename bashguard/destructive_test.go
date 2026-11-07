@@ -155,3 +155,143 @@ func TestDestructiveStillDetectedWhenArgsDynamic(t *testing.T) {
 		t.Fatalf("递归形态应判出不可逆，实得 %+v", d)
 	}
 }
+
+// TestDestructiveScanConsumesAllCalls 回归（tools#44）：不可逆扫描曾消费判定
+// 路径提前返回的 Invocations——首个非只读语句触发 Analyze 的 break 后，其后
+// 的调用根本不进扫描序列，前置触礁语句（未知命令/写重定向/动态展开/控制流）
+// 可稳定藏住后置的 rm -rf /，等于给确认门禁开旁路。改扫全量 AllCalls 后
+// issue 复现五例全部命中。
+func TestDestructiveScanConsumesAllCalls(t *testing.T) {
+	for _, cmd := range []string{
+		"unknowncmd; rm -rf /",           // 未知命令触礁 → break，Invocations 截断
+		"ls > /tmp/x; rm -rf /",          // 写重定向在 evalCall 之前 return，Invocations 为空
+		"echo $(date); rm -rf /",         // 参数动态展开触礁
+		"if true; then rm -rf /; fi",     // 控制流直接拒、不下探
+		"for f in *; do rm -rf $f; done", // for 形态同上
+	} {
+		d := Analyze(cmd, nil)
+		if !d.Destructive {
+			t.Errorf("%q 应判不可逆（全量 AllCalls 扫描）: %+v", cmd, d)
+		}
+	}
+}
+
+// TestRiskTierSingleSource 档位单源（tools#48）：per-tool 风险注册表与命令层
+// 判定共用同一档位体系——档位从**一次** Decision 推导（Decision.Risk），
+// 消费方不再自建平行枚举与命令层判定各判各的（双源漂移面归零）。
+func TestRiskTierSingleSource(t *testing.T) {
+	cases := []struct {
+		cmd  string
+		want RiskTier
+	}{
+		{"ls -la", RiskReadOnly},
+		{"git status", RiskReadOnly},
+		{"rm file.txt", RiskWrite},              // 写但可逆
+		{"some-unknown-tool --wipe", RiskWrite}, // 未知命令：非只读、未命中不可逆
+		{"rm -rf /", RiskDestructive},
+		{"shutdown -h now", RiskDestructive},
+		{strings.Repeat("a", MaxCommandLen+1), RiskUnevaluated}, // 超长未评估
+		{"echo 'unclosed", RiskUnevaluated},                     // 解析失败未评估
+	}
+	for _, c := range cases {
+		if got := Analyze(c.cmd, nil).Risk(); got != c.want {
+			t.Errorf("Analyze(%q).Risk() = %q, want %q", c.cmd, got, c.want)
+		}
+	}
+	// 超长但窗口命中不可逆：按更强的信号报不可逆档（Unevaluated 并存）
+	d := Analyze(strings.Repeat("# padding comment\n", 800)+"rm -rf /data", nil)
+	if d.Risk() != RiskDestructive || !d.Unevaluated {
+		t.Fatalf("超长窗口命中不可逆应报不可逆档且保留未评估事实: %+v", d)
+	}
+}
+
+// TestRiskTierSharedTableRegistration per-tool 注册面（tools#48）：宿主的工具
+// 专属不可逆规则注册进同一张 Table（Destructive 面）即参与全部档位判定
+// （含 AllCalls 扫描与内核兜底）——不需要在表外再叠一层平行判定。
+func TestRiskTierSharedTableRegistration(t *testing.T) {
+	tbl := DefaultTable()
+	// 宿主工具的专属形态：堡垒机 agent 的 force-release 子命令恒不可逆
+	tbl.Destructive["jumpctl"] = Policy{Subcommands: map[string]Policy{
+		"force-release": {Destructive: true},
+	}}
+
+	for _, c := range []struct {
+		cmd  string
+		want RiskTier
+	}{
+		{"jumpctl force-release prod", RiskDestructive},      // 注册规则直接生效
+		{"sudo jumpctl force-release prod", RiskDestructive}, // 内核兜底同样吃到注册规则
+		{"jumpctl status", RiskWrite},                        // 未命中子命令：写档
+	} {
+		if got := Analyze(c.cmd, tbl).Risk(); got != c.want {
+			t.Errorf("Analyze(%q).Risk() = %q, want %q", c.cmd, got, c.want)
+		}
+	}
+	// 注册不影响缺省表（副本契约，既有 TestDestructiveCustomRule 同款）
+	if Analyze("jumpctl force-release prod", nil).Destructive {
+		t.Fatal("自建规则不得污染缺省表")
+	}
+}
+
+// TestOverlongCommandNotFailOpen 回归（tools#45）：超长命令此前直接
+// Destructive=false——一条 10K+1 字节、前面塞满注释、结尾 rm -rf 的命令据此
+// 绕过不可逆二次确认（「未扫描」无任何显式标记）。现在：Unevaluated=true
+// 显式标记「未评估」（调用方 fail-closed），且头/尾窗 best-effort 扫描把
+// 实测攻击形态的 rm -rf 照常判出。
+func TestOverlongCommandNotFailOpen(t *testing.T) {
+	// 尾部 payload（issue 实测攻击形态：垃圾铺垫在前）：尾窗命中
+	tail := strings.Repeat("# padding comment\n", 800) + "rm -rf /data"
+	if len(tail) <= MaxCommandLen {
+		t.Fatalf("测试输入应超长: %d", len(tail))
+	}
+	d := Analyze(tail, nil)
+	if !d.Unevaluated || !d.Destructive {
+		t.Fatalf("超长尾部 rm -rf 应未评估且判出不可逆: %+v", d)
+	}
+
+	// 头部 payload（payload 在前、铺垫在后）：头窗命中
+	head := "rm -rf /data\n" + strings.Repeat("# padding comment\n", 800)
+	d = Analyze(head, nil)
+	if !d.Unevaluated || !d.Destructive {
+		t.Fatalf("超长头部 rm -rf 应未评估且判出不可逆: %+v", d)
+	}
+
+	// 纯垃圾超长：无命中——但必须显式「未评估」，调用方按保守侧处理
+	d = Analyze(strings.Repeat("a", MaxCommandLen+1), nil)
+	if d.ReadOnly || !d.Unevaluated || d.Destructive {
+		t.Fatalf("超长纯垃圾应非只读+未评估+无命中: %+v", d)
+	}
+
+	// 正常长度命令不带未评估标记；解析失败同样属未评估
+	if d := Analyze("ls -la", nil); d.Unevaluated {
+		t.Fatalf("正常命令不应标记未评估: %+v", d)
+	}
+	if d := Analyze("echo 'unclosed", nil); !d.Unevaluated {
+		t.Fatalf("解析失败应标记未评估: %+v", d)
+	}
+}
+
+// TestDestructiveThroughUnregisteredDispatcher 回归（tools#44）：全量集合不剥
+// 包装——sudo/doas 这类不在 Commands 表的调度器，内核命令是参数不是语法调用，
+// 扫描须按内核再判一次（sudo/xargs 形态）；已注册命令（echo）的参数是数据，
+// 不参与内核兜底（不误报）。
+func TestDestructiveThroughUnregisteredDispatcher(t *testing.T) {
+	for _, cmd := range []string{
+		"sudo rm -rf /data",    // 内核在首位
+		"sudo -n rm -rf /data", // 跳过调度器前置 flag 定位内核
+		"doas chmod -R 755 /data",
+	} {
+		d := Analyze(cmd, nil)
+		if !d.Destructive {
+			t.Errorf("%q 应按内核判出不可逆: %+v", cmd, d)
+		}
+	}
+	// echo 已注册：参数是数据，内核兜底不得把 echo rm 当真调用
+	if d := Analyze("echo rm -rf /", nil); d.Destructive {
+		t.Errorf("echo 的参数是数据，不参与内核兜底: %+v", d)
+	}
+	// 未注册调度器 + 无不可逆内核：不误报
+	if d := Analyze("sudo ls -la", nil); d.Destructive {
+		t.Errorf("sudo ls 无不可逆内核，不应误报: %+v", d)
+	}
+}
