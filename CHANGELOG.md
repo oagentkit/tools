@@ -2,6 +2,61 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.13.0] — 2026-11-07
+
+### 修复：bashguard 不可逆旁路/超长 fail-open/档位单源 + kimi 中断吞错 + PR 号卫生 + 检索消毒（#44-#49）
+
+## 概要
+六个安全/正确性修复：bashguard 三连修（#44 #45 #48）、acpx kimi 中断吞错（#46）、workcopy PR 号 refspec 卫生（#47）、websearch 检索结果提示词注入消毒（#49）。每 issue 一个 commit，测试全绿（gofmt / go vet / go build / go test -race）。
+---
+close #44
+**根因**：`Analyze` 的不可逆判定 `destructiveScan(d.Invocations)` 消费的是判定路径的消费序列——`Invocations` 在首个非只读语句处提前 break，未知命令/写重定向/动态展开/控制流一旦前置触礁，其后的调用根本不进扫描序列，后置的 `rm -rf /` 判不出 `Destructive`，确认门禁开了稳定可复现的旁路（issue 五例全复现）。全量事实集 `Decision.AllCalls`（#35 为此收编）就在手边却没被消费。
+**修法**：`destructiveScan` 改扫 `d.AllCalls`（全 AST simple command 集合：管道后半/命令替换/子 shell/块语句全部可见，与判定路径是否提前返回无关）；补内核兜底 `destructiveKernel`——AllCalls 不剥包装，`sudo`/`doas` 这类不在 Commands 表的调度器（内核命令是参数不是语法调用）跳过前置 flag 后按内核再判一次；已注册命令（echo/git …）的参数是数据不参与（`echo rm -rf` 不误报），方向保守（多报只是多一次确认）。回归：`TestDestructiveScanConsumesAllCalls`（前置触礁五形态全命中）、`TestDestructiveThroughUnregisteredDispatcher`。
+---
+close #45
+**根因**：超长命令（>10K）直接 `return Decision{Reason: …}`——对只读档是保守拒，但对不可逆档是静默放弃：10K+1 字节、前面塞满注释、结尾 `rm -rf /` 的命令 `Destructive=false`，「判据不可判」与「判了不不可逆」被压成同一个信号，且无任何「未扫描」标记供调用方 fail-closed。
+**修法**：`Decision` 增加显式 `Unevaluated` 标记（超长与解析失败两条未进 AST 的路径都置位）；超长路径另做头/尾各 10K 字节窗口的 best-effort 解析扫描（payload 位置攻击者可控：头窗覆盖前缀形态，尾窗覆盖「垃圾铺垫+尾部收尾」的 issue 实测攻击形态，尾窗丢弃截断残缺首行，重叠区按调用去重），窗口内命中的不可逆动作照常置 `Destructive`；窗口语法破损时作废，`Unevaluated` 标记兜底保守侧。回归：`TestOverlongCommandNotFailOpen`。
+---
+close #46
+**根因**：kimi 适配器对 `runCLI` 的 err 只在 `lastAssistant` 为空时上抛——进程被杀前吐过任一条 assistant 消息，超时/取消/被信号杀死的 err 即被吞、整体按成功返回（ExitCode 是被杀的非零值而 error 为 nil）。kimi 没有协议终态事件，「收到过 assistant 消息」是远弱于终态的代理条件：超时被杀时任务并未完成。
+**修法**：区分 err 类别——`isInterruptedExec`（`procx.ErrTimeout` / `procx.ErrCanceled` / `exec.ExitError` 且 wait status 信号终止）判定「没跑完」的中断类，即使有部分文本也如实上抛 err，部分文本挂 `RunResult`（新增 `Interrupted=true` 标记）供排障；「跑完了但退出码非零」的终态优先路径（既有 `TestKimiExitNonZeroWithResult` 钉住的契约）不变。回归：`TestKimiInterruptedPropagatesError`、`TestKimiSignalKillPropagatesError`。
+---
+close #47
+**根因**：`prepare` 对 `key.DefaultBranch` 有 fail-fast 引用名卫生，但同样拼进 git fetch refspec 的 `key.Number` 完全没有校验——同一 refspec 的两个组成只守了一行。Number 含冒号（`1/head:refs/heads/x`）时拼出的 refspec 被 git fetch 当 src:dst 在沙箱克隆内写本地引用（无 shell 注入面，危害限于克隆内引用伪造，但守卫不齐是不一致）。
+**修法**：`Ensure` 入口对 Number 补纯数字白名单（`isPrNumber`——三大平台 PR/MR 号均为十进制，纯数字即合法形态全集），fail-fast 在建任何目录之前；prepare 与 refresh 两条 refspec 路径由同一道守卫覆盖。回归：`TestEnsureRejectsInjectedPRNumber`（冒号注入/空号/选项/分号/路径五形态）。
+---
+close #48
+**根因**：bashguard 的不可逆档与 MCP 工具风险注册表是两个各判各的「destructive」判定（issue 实证 jms-mcp：锁 tools v0.10.4 错过 v0.11.0 不可逆档与 v0.12.0 AllCalls，手维护 20+ 条 per-tool `Risk_destructive` 注册表又在命令层叠 bashguard——双源漂移，不可逆拦截面出现缝隙）。
+**修法**：档位体系单源化——导出 `RiskTier`（readonly / write / destructive / unevaluated）与 `Decision.Risk()`（档位从**一次**判定推导：不可逆 > 未评估 > 只读 > 写），per-tool 风险注册表引用同一组枚举、工具专属规则注册进同一张 `Table`（Destructive 面）即参与全部档位判定（含 #44 的 AllCalls 扫描与内核兜底），命令提取统一走 `Decision.AllCalls` 替代手写。枚举 godoc 标注与粗粒度风险级（mcpkit low/medium/high）的映射及 v0.10.4→v0.12.0 迁移注记（CHANGELOG 由生成器产出不可手改，注记落 godoc）。测试：`TestRiskTierSingleSource`、`TestRiskTierSharedTableRegistration`。
+---
+close #49
+**根因**：AsTool 闭包把 Title/URL/Snippet 原样拼进「N. 标题\n URL\n 摘要」编号列表——Title/Snippet 是攻击者可影响的半可信外网内容（SEO 投毒/被抓取页面），敌意等级高于仓库内内容（skillkit 对仓库内 description/title 都过 `fence.EscapeUntrusted`，#34 先例），本仓输入面更敌对却零消毒；snippet 内嵌换行即可伪造编号条目与真实 URL 并列、夹带伪指令（issue 实测探针复现）。
+**修法**：对齐 skillkit#34 修法口径——Title 先折叠单行（`strings.Fields` join）再过 `fence.EscapeUntrusted`，Snippet 过 `fence.EscapeUntrusted`（保留多行、行首 markdown 结构被插零宽空格中和：伪造编号条目不再是列表标记）；URL 是承重声明保留原样；消毒中和结构不删内容。guardx v0.19.0 已是本仓直接依赖，fence 零新增依赖面。回归：`TestAsToolSanitizesUntrustedResults`（issue 探针同形态）。
+---
+## 验证
+- `gofmt -l .` 为空；`go vet ./...`、`go build ./...`、`go test ./...`、`go test -race -count=1 ./...` 本地全绿。
+- 未触碰 go.mod / CHANGELOG.md / AGENTS.md / README / matrix-tools；bashguard 保持静态解析、不执行命令。
+
+- 杂务(deps)：依赖地板追到最新——github.com/oagentkit/guardx v0.20.0
+
+| 依赖 | 现地板 | 抬到 |
+|---|---|---|
+| `github.com/oagentkit/guardx` | `v0.19.0` | `v0.20.0` |
+| `github.com/oagentkit/runtime` | `v0.8.0` | `v0.11.0` |
+| `github.com/oagentkit/textx` | `v0.9.0` | `v0.10.0` |
+| `github.com/oekit/concurrency` | `v0.25.1` | `v0.28.0` |
+| `github.com/oekit/logx` | `v0.8.3` | `v0.8.5` |
+| `github.com/oekit/pkg` | `v0.34.1` | `v0.37.0` |
+## 为什么
+矩阵的**发版时刻地板时效**门禁（`verify_tag_floor --ref HEAD`）要求：各仓 HEAD
+（= 下次发版会发出去的内容）的依赖地板，相对那一刻的依赖最新版本，不能已落后。
+oekit 基座与矩阵模块都在高频发版 ⇒ 地板是**跑步机**，落后一格就会判红。
+## 兼容性实测
+本工具在提交前跑完 `go build` / `go vet` / `go test -race -count=1 ./...`（全绿才提交）
+与 `go mod tidy -diff`（无漂移）⇒ 改动**只影响依赖版本**，零行为差异。
+只改 `go.mod` / `go.sum` ⇒ 不需要 CHANGELOG 条目（版本段由下次发版的 `prewrite` 生成）。
+
+
 ## [v0.12.0] — 2026-11-06
 
 ### 新增(bashguard,workcopy)：AllCalls 全 AST 调用集 + DeepenOptions 参数化
