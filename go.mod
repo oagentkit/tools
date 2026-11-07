@@ -10,7 +10,7 @@ require (
 	github.com/oagentkit/runtime v0.11.0
 	github.com/oagentkit/textx v0.10.0
 	github.com/oekit/concurrency v0.28.0
-	github.com/oekit/logx v0.8.5
+	github.com/oekit/logx v0.8.6
 	github.com/oekit/pkg v0.37.1
 )
 
