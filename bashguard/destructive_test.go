@@ -176,6 +176,101 @@ func TestDestructiveScanConsumesAllCalls(t *testing.T) {
 	}
 }
 
+// TestRiskTierSingleSource 档位单源（tools#48）：per-tool 风险注册表与命令层
+// 判定共用同一档位体系——档位从**一次** Decision 推导（Decision.Risk），
+// 消费方不再自建平行枚举与命令层判定各判各的（双源漂移面归零）。
+func TestRiskTierSingleSource(t *testing.T) {
+	cases := []struct {
+		cmd  string
+		want RiskTier
+	}{
+		{"ls -la", RiskReadOnly},
+		{"git status", RiskReadOnly},
+		{"rm file.txt", RiskWrite},              // 写但可逆
+		{"some-unknown-tool --wipe", RiskWrite}, // 未知命令：非只读、未命中不可逆
+		{"rm -rf /", RiskDestructive},
+		{"shutdown -h now", RiskDestructive},
+		{strings.Repeat("a", MaxCommandLen+1), RiskUnevaluated}, // 超长未评估
+		{"echo 'unclosed", RiskUnevaluated},                     // 解析失败未评估
+	}
+	for _, c := range cases {
+		if got := Analyze(c.cmd, nil).Risk(); got != c.want {
+			t.Errorf("Analyze(%q).Risk() = %q, want %q", c.cmd, got, c.want)
+		}
+	}
+	// 超长但窗口命中不可逆：按更强的信号报不可逆档（Unevaluated 并存）
+	d := Analyze(strings.Repeat("# padding comment\n", 800)+"rm -rf /data", nil)
+	if d.Risk() != RiskDestructive || !d.Unevaluated {
+		t.Fatalf("超长窗口命中不可逆应报不可逆档且保留未评估事实: %+v", d)
+	}
+}
+
+// TestRiskTierSharedTableRegistration per-tool 注册面（tools#48）：宿主的工具
+// 专属不可逆规则注册进同一张 Table（Destructive 面）即参与全部档位判定
+// （含 AllCalls 扫描与内核兜底）——不需要在表外再叠一层平行判定。
+func TestRiskTierSharedTableRegistration(t *testing.T) {
+	tbl := DefaultTable()
+	// 宿主工具的专属形态：堡垒机 agent 的 force-release 子命令恒不可逆
+	tbl.Destructive["jumpctl"] = Policy{Subcommands: map[string]Policy{
+		"force-release": {Destructive: true},
+	}}
+
+	for _, c := range []struct {
+		cmd  string
+		want RiskTier
+	}{
+		{"jumpctl force-release prod", RiskDestructive},      // 注册规则直接生效
+		{"sudo jumpctl force-release prod", RiskDestructive}, // 内核兜底同样吃到注册规则
+		{"jumpctl status", RiskWrite},                        // 未命中子命令：写档
+	} {
+		if got := Analyze(c.cmd, tbl).Risk(); got != c.want {
+			t.Errorf("Analyze(%q).Risk() = %q, want %q", c.cmd, got, c.want)
+		}
+	}
+	// 注册不影响缺省表（副本契约，既有 TestDestructiveCustomRule 同款）
+	if Analyze("jumpctl force-release prod", nil).Destructive {
+		t.Fatal("自建规则不得污染缺省表")
+	}
+}
+
+// TestOverlongCommandNotFailOpen 回归（tools#45）：超长命令此前直接
+// Destructive=false——一条 10K+1 字节、前面塞满注释、结尾 rm -rf 的命令据此
+// 绕过不可逆二次确认（「未扫描」无任何显式标记）。现在：Unevaluated=true
+// 显式标记「未评估」（调用方 fail-closed），且头/尾窗 best-effort 扫描把
+// 实测攻击形态的 rm -rf 照常判出。
+func TestOverlongCommandNotFailOpen(t *testing.T) {
+	// 尾部 payload（issue 实测攻击形态：垃圾铺垫在前）：尾窗命中
+	tail := strings.Repeat("# padding comment\n", 800) + "rm -rf /data"
+	if len(tail) <= MaxCommandLen {
+		t.Fatalf("测试输入应超长: %d", len(tail))
+	}
+	d := Analyze(tail, nil)
+	if !d.Unevaluated || !d.Destructive {
+		t.Fatalf("超长尾部 rm -rf 应未评估且判出不可逆: %+v", d)
+	}
+
+	// 头部 payload（payload 在前、铺垫在后）：头窗命中
+	head := "rm -rf /data\n" + strings.Repeat("# padding comment\n", 800)
+	d = Analyze(head, nil)
+	if !d.Unevaluated || !d.Destructive {
+		t.Fatalf("超长头部 rm -rf 应未评估且判出不可逆: %+v", d)
+	}
+
+	// 纯垃圾超长：无命中——但必须显式「未评估」，调用方按保守侧处理
+	d = Analyze(strings.Repeat("a", MaxCommandLen+1), nil)
+	if d.ReadOnly || !d.Unevaluated || d.Destructive {
+		t.Fatalf("超长纯垃圾应非只读+未评估+无命中: %+v", d)
+	}
+
+	// 正常长度命令不带未评估标记；解析失败同样属未评估
+	if d := Analyze("ls -la", nil); d.Unevaluated {
+		t.Fatalf("正常命令不应标记未评估: %+v", d)
+	}
+	if d := Analyze("echo 'unclosed", nil); !d.Unevaluated {
+		t.Fatalf("解析失败应标记未评估: %+v", d)
+	}
+}
+
 // TestDestructiveThroughUnregisteredDispatcher 回归（tools#44）：全量集合不剥
 // 包装——sudo/doas 这类不在 Commands 表的调度器，内核命令是参数不是语法调用，
 // 扫描须按内核再判一次（sudo/xargs 形态）；已注册命令（echo）的参数是数据，

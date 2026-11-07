@@ -30,6 +30,50 @@ import (
 // 的策略决定（不同宿主对同一命令的处置可能不同）；本包负责的是
 // 「这条命令不可逆」这个**事实**。
 
+// RiskTier 命令风险档位（单源枚举，tools#48）。
+//
+// 档位体系只此一份：消费方（如自带 MCP 工具风险注册表的宿主）的 per-tool
+// 档位应引用同一组枚举，工具专属的不可逆规则注册进 Table（Destructive 面）
+// 而不是另立一张平行表——两张表各判各的必然漂移：jms-mcp（堡垒机执行 MCP，
+// 不可逆操作是核心安全面）曾锁 tools v0.10.4，错过 v0.11.0 的不可逆档与
+// v0.12.0 的 AllCalls，其手维护的 20+ 条 per-tool Risk_destructive 注册表与
+// 命令层 bashguard 判定双源漂移，不可逆拦截面出现缝隙。命令提取统一走
+// Decision.AllCalls（全 AST 调用集，Analyze 已对其做不可逆扫描），不要手写。
+//
+// 粗粒度风险级（low/medium/high，对标 mcpkit ToolHints.RiskLevel）的映射：
+// readonly→low、write→medium、destructive/unevaluated→high（保守侧）。
+type RiskTier string
+
+const (
+	// RiskReadOnly 只读档：不执行任何写路径。
+	RiskReadOnly RiskTier = "readonly"
+	// RiskWrite 写档：非只读（写路径或未知命令）但未命中不可逆判据。
+	// 注意未知命令并未被证明「可逆」，保守调用方可视同待确认。
+	RiskWrite RiskTier = "write"
+	// RiskDestructive 不可逆档：一旦跑就收不回来——二次确认的判据。
+	RiskDestructive RiskTier = "destructive"
+	// RiskUnevaluated 未评估档：未进 AST 判定（超长/解析失败）——保守侧，
+	// 调用方按需与不可逆档同处置（要确认）。
+	RiskUnevaluated RiskTier = "unevaluated"
+)
+
+// Risk 单源推导本判定的风险档位：不可逆 > 未评估 > 只读 > 写。
+//
+// Destructive 优先于 Unevaluated：超长命令的头/尾窗扫描命中不可逆时，按
+// 更强的信号报（窗口未覆盖全文的事实已由 Unevaluated 并存表达）。
+func (d Decision) Risk() RiskTier {
+	switch {
+	case d.Destructive:
+		return RiskDestructive
+	case d.Unevaluated:
+		return RiskUnevaluated
+	case d.ReadOnly:
+		return RiskReadOnly
+	default:
+		return RiskWrite
+	}
+}
+
 // destructiveScan 扫描调用序列里的不可逆动作。
 //
 // 与只读判定正交：命令被只读门拒了（rm 不在只读表），它仍可能是不可逆的——

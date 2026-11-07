@@ -19,7 +19,8 @@
 // 只读表只放只读命令，而不可逆判据要覆盖 rm / mkfs / dd 这类写命令。
 // 「要不要二次确认」是调用方的策略决定；本包给的是「这条命令不可逆」这个事实。
 //
-// 上限 10K 字符（对标 ZCode：超长命令不进解析器）。
+// 上限 10K 字符（对标 ZCode：超长命令不进解析器）。超长路径带 Unevaluated
+// 标记 + 头/尾窗 best-effort 不可逆扫描——不静默 fail-open。
 package bashguard
 
 import (
@@ -108,6 +109,14 @@ type Decision struct {
 	Destructive bool
 	// DestructiveReason 不可逆依据（人可读，审计用）；未命中时为空。
 	DestructiveReason string
+	// Unevaluated 命令未进 AST 判定（超长未进解析器 / 解析失败，tools#45）。
+	//
+	// 此时 ReadOnly=false 只是保守拒，**Destructive=false 不再意味着「判了
+	// 不不可逆」**——未评估就是不可判：「判据不可判」与「判了不不可逆」不得
+	// 压成同一个信号。调用方对未评估输入须按保守侧处理（如照常要二次确认），
+	// 不得当「已判安全」。超长路径另有头/尾窗 best-effort 扫描兜底（见
+	// overlongDecision）：窗口内命中的不可逆动作照常置 Destructive。
+	Unevaluated bool
 	// Invocations 提取的调用序列（观测/风险面）。
 	//
 	// ⚠️ 这是**判定路径**的消费序列，不是全量事实：判定在首个非只读调用上
@@ -175,18 +184,18 @@ func collectAllCalls(f *mvdan.File) []Invocation {
 	return out
 }
 
-// Analyze 静态解析与判定。超长/解析失败返回非只读（保守）。
+// Analyze 静态解析与判定。超长/解析失败返回非只读（保守）且 Unevaluated=true。
 func Analyze(cmdStr string, t *Table) Decision {
 	if t == nil {
 		t = defaultTable() // 只读共享模板，免每调用拷贝整表
 	}
 	if len(cmdStr) > MaxCommandLen {
-		return Decision{Reason: "命令超长（>10K），不进解析器"}
+		return t.overlongDecision(cmdStr)
 	}
 	parser := mvdan.NewParser(mvdan.Variant(mvdan.LangBash))
 	f, err := parser.Parse(strings.NewReader(cmdStr), "")
 	if err != nil {
-		return Decision{Reason: fmt.Sprintf("解析失败: %v", err)}
+		return Decision{Reason: fmt.Sprintf("解析失败: %v", err), Unevaluated: true}
 	}
 	d := Decision{ReadOnly: true, AllCalls: collectAllCalls(f)}
 	for _, stmt := range f.Stmts {
@@ -207,6 +216,59 @@ func Analyze(cmdStr string, t *Table) Decision {
 		d.DestructiveReason = why
 	}
 	return d
+}
+
+// overlongDecision 超长命令的保守收口（tools#45）：超长不进解析器是既有
+// 上限，但此前直接 Destructive=false——一条 10K+1 字节、前面塞满注释、结尾
+// rm -rf / 的命令据此绕过不可逆二次确认（「判据不可判」与「判了不不可逆」
+// 被压成同一个信号，且无任何「未扫描」标记供调用方 fail-closed）。两层保守：
+//   - Unevaluated=true：显式「未评估」标记，调用方按保守侧处理（未评估 ≠ 安全）；
+//   - 头/尾各 MaxCommandLen 字节窗口的 best-effort 解析扫描：payload 位置
+//     攻击者可控，头窗覆盖前缀形态，尾窗覆盖「垃圾铺垫 + 尾部收尾」的实测
+//     攻击形态。窗口截断致语法破损时该窗口作废（Unevaluated 已兜底保守侧）。
+func (t *Table) overlongDecision(cmdStr string) Decision {
+	d := Decision{
+		Reason:      fmt.Sprintf("命令超长（%d 字节 > %d 上限），不进解析器", len(cmdStr), MaxCommandLen),
+		Unevaluated: true,
+	}
+	seen := map[string]bool{}
+	for _, w := range truncatedWindows(cmdStr) {
+		f, err := mvdan.NewParser(mvdan.Variant(mvdan.LangBash)).Parse(strings.NewReader(w), "")
+		if err != nil {
+			continue // 残缺窗口作废：best-effort，未评估标记才是保守侧的兜底
+		}
+		for _, inv := range collectAllCalls(f) {
+			key := inv.Name + "\x00" + strings.Join(inv.Args, "\x00")
+			if inv.Dynamic {
+				key += "\x00dyn"
+			}
+			if seen[key] {
+				continue // 头/尾窗重叠区去重（AllCalls 是事实集，不重复计数）
+			}
+			seen[key] = true
+			d.AllCalls = append(d.AllCalls, inv)
+		}
+	}
+	if ok, why := t.destructiveScan(d.AllCalls); ok {
+		d.Destructive = true
+		d.DestructiveReason = why
+	}
+	return d
+}
+
+// truncatedWindows 超长命令的 best-effort 解析窗口：头/尾各 MaxCommandLen
+// 字节。尾窗先丢掉截断产生的残缺首行（从完整行边界起步，避免半行词干扰
+// 解析；头窗的残缺尾词只是数据，无须处理）。
+func truncatedWindows(s string) []string {
+	head := s[:MaxCommandLen]
+	tail := s[len(s)-MaxCommandLen:]
+	if i := strings.IndexByte(tail, '\n'); i >= 0 {
+		tail = tail[i+1:]
+	}
+	if head == tail {
+		return []string{head}
+	}
+	return []string{head, tail}
 }
 
 // evalStmt 评估单个语句；返回空串=只读，非空=非只读原因。
