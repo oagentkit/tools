@@ -104,6 +104,89 @@ func TestFocusPaths(t *testing.T) {
 	}
 }
 
+// TestSemgrepTargetsOptionInert 回归（tools#62，argument injection）：聚焦
+// 路径来自 PR diff——攻击者可影响（PR 可创建 "--exclude" 这类 POSIX 合法
+// 文件名）。无 "--" 端界符时 argparse/click 把 "-" 开头 token 当 flag：
+// 已知取值 flag（如 semgrep --exclude）静默吞掉后续真实路径——含硬编码
+// 密钥的文件被排除出扫描，finding 永不进合并/裁决层（扫描规避）。
+// argv 必须在目标清单前插 "--" 端界符：其后 token 一律按 positional 目标
+// 处理，"-" 开头文件名照常入扫。
+func TestSemgrepTargetsOptionInert(t *testing.T) {
+	dir := t.TempDir()
+	// fake semgrep 先落盘 argv 再回合法空报告（不触发 Err 分支）
+	bin := fakeBin(t, dir, "semgrep",
+		`printf '%s\n' "$@" > argv.txt`+"\n"+`printf '%s' '{"results":[]}'`)
+	results := Scan(context.Background(),
+		Config{SemgrepBin: bin, SemgrepConfig: "p/default", Timeout: 30 * time.Second},
+		dir, "", []string{"internal/a.go", "--exclude", "secrets.go", "-x", "cmd/main.go"},
+		logx.Nop())
+	if len(results) != 1 || results[0].Err != nil {
+		t.Fatalf("results = %+v", results)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "argv.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	argv := strings.Fields(string(raw))
+	sep := -1
+	for i, a := range argv {
+		if a == "--" {
+			sep = i
+			break
+		}
+	}
+	if sep < 0 {
+		t.Fatalf("目标清单前必须插 \"--\" 端界符（tools#62）: %v", argv)
+	}
+	// 全部聚焦目标（含 "-" 开头的恶意文件名）必须落在 "--" 之后——
+	// 作为扫描目标入扫，而非被解析成 flag / flag 取值
+	for _, target := range []string{"internal/a.go", "--exclude", "secrets.go", "-x", "cmd/main.go"} {
+		pos := -1
+		for i, a := range argv {
+			if a == target {
+				pos = i
+				break
+			}
+		}
+		if pos <= sep {
+			t.Fatalf("目标 %q 必须落在 \"--\" 之后（option-inert）: %v", target, argv)
+		}
+	}
+}
+
+// TestScanNilLogger 回归（tools#61）：Scan 的 log 参数无 nil 守卫时，宿主按
+// 「全空 = 功能关闭」最小装配传 nil 即 panic（nil 接口方法调用确定性炸）。
+// 仓内约定是 nil-safe logger（Pool.logger() 兜底同款）——nil 走 logx.Nop
+// 静默兜底。两条会打日志的路径都要过：semgrep-no-config 的 Warn、gitleaks
+// 跑完的 Info。
+func TestScanNilLogger(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("nil Logger 不应 panic（tools#61）: %v", r)
+		}
+	}()
+	dir := t.TempDir()
+	// Warn 路径：semgrep bin 配了但 config 空 → log.Warn
+	semgrepBin := fakeBin(t, dir, "semgrep", `exit 0`)
+	if results := Scan(context.Background(),
+		Config{SemgrepBin: semgrepBin, Timeout: 30 * time.Second}, dir, "", nil, nil); len(results) != 0 {
+		t.Fatalf("未配 config 不应产出结果: %+v", results)
+	}
+	// Info 路径：gitleaks 全程跑完 → log.Info
+	gitleaksBin := fakeBin(t, dir, "gitleaks", `
+while [ $# -gt 0 ]; do
+  if [ "$1" = "--report-path" ]; then printf '%s' '[]' > "$2"; fi
+  shift
+done
+exit 0
+`)
+	results := Scan(context.Background(),
+		Config{GitleaksBin: gitleaksBin, Timeout: 30 * time.Second}, dir, "", nil, nil)
+	if len(results) != 1 || results[0].Err != nil || len(results[0].Findings) != 0 {
+		t.Fatalf("nil Logger 下 gitleaks 应正常产出空结果: %+v", results)
+	}
+}
+
 // semgrep bin 配了但 config 未配：不产结果（不算覆盖缺口），只告警。
 func TestSemgrepNoConfigSkipped(t *testing.T) {
 	dir := t.TempDir()
