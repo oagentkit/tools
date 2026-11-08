@@ -2,6 +2,12 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.13.4] — 2026-11-08
+
+### 依赖地板：oekit 基座追平——pkg v0.38.0 / logx v0.8.11 / concurrency v0.29.0
+
+oekit BOM v0.2.11 兼容地板门禁（oekit#163）对齐轮；无代码变更。
+
 ## [v0.13.3] — 2026-11-08
 
 ### 修复(websearch/sast)：多行 URL 消毒残余面 + semgrep argv 端界符 + nil Logger 兜底（close #63 #62 #61）
