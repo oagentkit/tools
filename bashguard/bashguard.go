@@ -20,7 +20,8 @@
 // 「要不要二次确认」是调用方的策略决定；本包给的是「这条命令不可逆」这个事实。
 //
 // 上限 10K 字符（对标 ZCode：超长命令不进解析器）。超长路径带 Unevaluated
-// 标记 + 头/尾窗 best-effort 不可逆扫描——不静默 fail-open。
+// 标记（细分归因 OverLength / Unparsed，tools#80）+ 头/尾窗 best-effort
+// 不可逆扫描——不静默 fail-open。
 package bashguard
 
 import (
@@ -125,7 +126,20 @@ type Decision struct {
 	// 压成同一个信号。调用方对未评估输入须按保守侧处理（如照常要二次确认），
 	// 不得当「已判安全」。超长路径另有头/尾窗 best-effort 扫描兜底（见
 	// overlongDecision）：窗口内命中的不可逆动作照常置 Destructive。
+	//
+	// 细分归因见 OverLength / Unparsed（tools#80）：未评估的伞标记在此，
+	// 两细分只回答「为什么没判」，两者置位时本标记必置位。
 	Unevaluated bool
+	// OverLength 命令超过 MaxCommandLen 未进解析器（tools#80）：Unevaluated
+	// 的细分归因之一。集成方据此区分「超长拒绝判定」与「解析失败拒绝判定」，
+	// 并与「判定完成没发现风险」（Unevaluated/OverLength/Unparsed 全 false）
+	// 相区分——拒绝判定（任一标记置位）时 ReadOnly=false 只是保守拒，命令
+	// 文本里的实际风险（如 10KB 注释填充后尾随的 rm -rf …）未被评估，调用方
+	// 须自行升级处置（如照常要确认）。
+	OverLength bool
+	// Unparsed 解析失败未进 AST 判定（tools#80）：Unevaluated 的细分归因之一，
+	// 语义同 OverLength（拒绝判定，须按保守侧处理）。
+	Unparsed bool
 	// Invocations 提取的调用序列（观测/风险面）。
 	//
 	// ⚠️ 这是**判定路径**的消费序列，不是全量事实：判定在首个非只读调用上
@@ -204,7 +218,7 @@ func Analyze(cmdStr string, t *Table) Decision {
 	parser := mvdan.NewParser(mvdan.Variant(mvdan.LangBash))
 	f, err := parser.Parse(strings.NewReader(cmdStr), "")
 	if err != nil {
-		return Decision{Reason: fmt.Sprintf("解析失败: %v", err), Unevaluated: true}
+		return Decision{Reason: fmt.Sprintf("解析失败: %v", err), Unevaluated: true, Unparsed: true}
 	}
 	d := Decision{ReadOnly: true, AllCalls: collectAllCalls(f)}
 	for _, stmt := range f.Stmts {
@@ -239,6 +253,7 @@ func (t *Table) overlongDecision(cmdStr string) Decision {
 	d := Decision{
 		Reason:      fmt.Sprintf("命令超长（%d 字节 > %d 上限），不进解析器", len(cmdStr), MaxCommandLen),
 		Unevaluated: true,
+		OverLength:  true,
 	}
 	seen := map[string]bool{}
 	for _, w := range truncatedWindows(cmdStr) {

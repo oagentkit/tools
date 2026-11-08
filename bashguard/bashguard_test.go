@@ -407,3 +407,35 @@ func TestAllCallsReadOnlyPath(t *testing.T) {
 		t.Fatalf("AllCalls: %+v", d.AllCalls)
 	}
 }
+
+// TestUnevaluatedRefusalMarkers 回归（tools#80）：超长与解析失败都是「拒绝
+// 判定」而非「判定完成没发现风险」——除 Unevaluated 伞标记（tools#45）外须
+// 有细分归因 OverLength / Unparsed，集成方才能区分未判与判净并升级处置
+// （如 10KB 注释填充撑过长度闸、文本里尾随 rm -rf 的填充绕过：拒绝判定的
+// 命令不因 AllCalls/Invocations 全空而归「安全」）。
+func TestUnevaluatedRefusalMarkers(t *testing.T) {
+	d := Analyze(strings.Repeat("a", MaxCommandLen+1), nil)
+	if !d.Unevaluated || !d.OverLength || d.Unparsed {
+		t.Fatalf("超长应置 Unevaluated+OverLength 且不置 Unparsed: %+v", d)
+	}
+	if d.ReadOnly || d.Reason == "" {
+		t.Fatalf("超长应保守拒并带原因: %+v", d)
+	}
+	d = Analyze("echo 'unclosed", nil)
+	if !d.Unevaluated || !d.Unparsed || d.OverLength {
+		t.Fatalf("解析失败应置 Unevaluated+Unparsed 且不置 OverLength: %+v", d)
+	}
+	// 判定完成（无论只读与否）：三个标记全 false——判净 ≠ 未判
+	for _, cmd := range []string{"ls -la", "rm -rf /x", "echo hi > f", "sed -n 'w /tmp/x' f"} {
+		if d := Analyze(cmd, nil); d.Unevaluated || d.OverLength || d.Unparsed {
+			t.Errorf("%q 判定完成不应带拒绝判定标记: %+v", cmd, d)
+		}
+	}
+	// tools#45 行为不回退：超长仍走头/尾窗 best-effort，窗口命中不可逆照常
+	// 置 Destructive，且与细分标记并存
+	payload := strings.Repeat("# pad\n", MaxCommandLen/6) + "rm -rf /"
+	d = Analyze(payload, nil)
+	if !d.OverLength || !d.Unevaluated || !d.Destructive || d.DestructiveReason == "" {
+		t.Fatalf("超长窗口命中 rm -rf 应 OverLength+Unevaluated+Destructive: %+v", d)
+	}
+}
