@@ -62,6 +62,39 @@ func fallbackResult(stdout, stderr string, code int) *RunResult {
 	return &RunResult{Text: strings.TrimSpace(stdout), ExitCode: code, Raw: []byte(stdout), Stderr: stderrTail(stderr)}
 }
 
+// lostTerminalErr 终态丢失守门（tools#83）：stdout 里**存在**协议终态事件
+// 形状的行、却没被 OnLine 流识别成终态（hasTerm=false）时如实报错，拒绝把
+// 整条事件流原文当「最终回答」成功返回。
+//
+// 为什么会有这种组合：procx 的 lineWriter 对单行超 maxLineLen（1MB）的行
+// 整行丢弃且对调用方零信号（tools#83）——agent 任务产出大文件/长 diff 时
+// 终态事件恰好是那一行的形态真实存在（claude 的 result、mimo 的
+// step_finish…），OnLine 没见过 ⇒ hasTerm=false ⇒ 走全文兜底，把可达数 MB
+// 的 NDJSON 事件流原文当 RunResult.Text 交给消费方。协议解析漂移（CLI 版本
+// 升级改了终态形状）是同一组合的另一来源。
+//
+// 处置取「宁误报不静默给垃圾」：终态形状就在 stdout 里而我们没认出来，说明
+// 流水线有未知故障——报错（错误信息点名两种可能成因）让调用方排障，好于把
+// 原始事件流当成功答案注入下游 agent 循环。isTerminalLine 逐行做形状判定
+// （各适配器提供自家终态形状的廉价判定），首条命中即返回。
+func lostTerminalErr(who, stdout string, hasTerm bool, isTerminalLine func(string) bool) error {
+	if hasTerm || isTerminalLine == nil {
+		return nil
+	}
+	for len(stdout) > 0 {
+		line := stdout
+		if i := strings.IndexByte(stdout, '\n'); i >= 0 {
+			line, stdout = stdout[:i], stdout[i+1:]
+		} else {
+			stdout = ""
+		}
+		if isTerminalLine(line) {
+			return fmt.Errorf("acpx: %s 事件流含终态事件形状但未被识别为终态（可能单行超 1MB 上限被丢弃，或 CLI 版本协议漂移）——宁误报不静默，拒绝把事件流原文当最终回答兜底", who)
+		}
+	}
+	return nil
+}
+
 // parseJSONOut 容错解析 agent 的 JSON 输出：平衡括号感知地截取首个 JSON 对象
 // （日志混入/尾随噪音均可容忍）后 Unmarshal。失败时调用方走 fallbackResult。
 func parseJSONOut(stdout string, out any) error {

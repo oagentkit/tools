@@ -12,7 +12,9 @@
 // 安全模型（继承 Argus adapter_cli 实战纪律）：
 //   - 进程组执行：Setpgid + 超时/取消 TERM 整组 → killGrace 宽限后 SIGKILL（cmd.Cancel/WaitDelay）
 //   - 环境变量白名单：绝不继承 ARGUS_*/OPENAI_* 等凭证给子进程
-//   - stdout 限容：异常 agent 刷屏防内存放大（单行另设 maxLineLen 上限防无换行洪泛）
+//   - stdout 限容：异常 agent 刷屏防内存放大（单行另设 maxLineLen 上限防无换行洪泛；
+//     超限行对 OnLine 流整行丢弃、全文仍留 stdout——各适配器在兜底前过终态丢失
+//     守门 lostTerminalErr，防「终态行被丢后把事件流原文当最终回答」，tools#83）
 //   - prompt 注入防线：位置参数传递的 prompt 经 promptArg 防护，"-"/"--" 开头的
 //     内容不会被 CLI flag 解析器消费（否则 LLM 自填 prompt 可注入沙箱旁路开关）
 package acpx

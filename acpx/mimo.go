@@ -143,9 +143,23 @@ func (s *mimoStream) handleLine(line string) {
 	}
 }
 
+// mimoTerminalLine 终态形状判定（tools#83 守门用）：顶层 type=step_finish
+// 的事件行。
+func mimoTerminalLine(line string) bool {
+	var probe struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal([]byte(line), &probe); err != nil {
+		return false
+	}
+	return probe.Type == "step_finish"
+}
+
 // finalize 收尾装配（三段式骨架）：step_finish 到达即终态——执行错时终态优先
 // （agent 正常完成但退出码非零），空文本终态不再以 stdout 事件流原文兜底；
-// 无终态时保留 text 事件文本（版本差异下 step_finish 缺失的宽容路径）。
+// 无终态时保留 text 事件文本（版本差异下 step_finish 缺失的宽容路径），text
+// 为空走全文兜底前先过终态丢失守门（tools#83：stdout 里有 step_finish 形状
+// 却没被识别 = 行被丢或协议漂移，拒绝把事件流原文当回答）。
 func (s *mimoStream) finalize(stdout, stderr string, code int, err error) (*RunResult, error) {
 	// 有错如实报错：不因恰好收到部分文本而把失败跑当成功返回
 	//（2026-09 huginn 实弹教训：纯错误跑曾以 stdout 全文兜底成"成功"，
@@ -163,6 +177,9 @@ func (s *mimoStream) finalize(stdout, stderr string, code int, err error) (*RunR
 	}
 	text := s.text
 	if text == "" {
+		if lost := lostTerminalErr("mimo", stdout, false, mimoTerminalLine); lost != nil {
+			return nil, lost
+		}
 		text = strings.TrimSpace(stdout) // 事件流不可用时全文兜底（含 ANSI 码的场景由调用方清理）
 	}
 	return &RunResult{Text: text, SessionID: s.sessionID, Usage: s.usage, ExitCode: code, Raw: []byte(stdout), Stderr: stderrTail(stderr)}, nil

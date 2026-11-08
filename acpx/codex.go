@@ -110,7 +110,31 @@ func (s *codexStream) finalize(stdout, stderr string, code int, err error) (*Run
 	if text == "" {
 		text = s.lastText
 	}
+	// 终态丢失守门（tools#83）：output-last-message 文件与事件流 lastText
+	// 双双为空、stdout 里却存在 assistant_message 形状的事件行——该行单行
+	// 超 1MB 被 lineWriter 丢弃（agent 产出大文件/长 diff 的最终消息即可
+	// 触发）或协议漂移。宁误报不静默：报错而非把空文本/事件流断片当成功。
+	if text == "" {
+		if lost := lostTerminalErr("codex", stdout, false, codexTerminalLine); lost != nil {
+			return nil, lost
+		}
+	}
 	return &RunResult{Text: text, Usage: s.usage, ExitCode: code, Raw: []byte(stdout), Stderr: stderrTail(stderr)}, nil
+}
+
+// codexTerminalLine 正文形状判定（tools#83 守门用）：assistant_message 的
+// item.completed 事件行（与 handleLine 的取文判据同款）。
+func codexTerminalLine(line string) bool {
+	var probe struct {
+		Type string `json:"type"`
+		Item *struct {
+			ItemType string `json:"item_type"`
+		} `json:"item"`
+	}
+	if err := json.Unmarshal([]byte(line), &probe); err != nil {
+		return false
+	}
+	return probe.Type == "item.completed" && probe.Item != nil && probe.Item.ItemType == "assistant_message"
 }
 
 type codexEvent struct {
