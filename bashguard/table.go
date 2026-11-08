@@ -116,9 +116,15 @@ func defaultCommands() map[string]Policy {
 		"tr":        ro(bools("-c", "-C", "-d", "-s", "-t", "-u")),
 		"rev":       ro(bools()),
 		"column":    ro(bools("-t", "-s", "-c", "-n", "-e", "-H", "-R", "-r", "-V", "-N", "-E", "-g", "-F", "-L", "-J")),
-		"sed":       ro(with(bools("-n", "-E", "-r", "-z", "-s", "--silent", "--quiet", "--expression", "--file"), "-e", "string", "-f", "string", "--expression", "string", "--file", "string"), "-i", "--in-place", "-i.bak", "-w", "--follow-symlinks"),
-		"less":      ro(bools("-N", "-R", "-F", "-X", "-S", "-i", "-n", "-E", "-q", "-Q", "-M", "-m", "-g", "-j", "-w", "-z", "-A", "-B", "-C")),
-		"jq":        ro(with(bools("-r", "-c", "-n", "-e", "-s", "-S", "-a", "-C", "-M", "--tab", "-j", "-0", "-f"), "--arg", "string", "--argjson", "string", "--slurpfile", "string", "--rawfile", "string", "--raw-input", "bool", "--jsonargs", "bool"), "--raw-output0", "-o", "--output", "-o="),
+		// sed 是含 I/O 原语的 mini-language（w/W 写文件、e/s///e 执行命令）：
+		// ReadOnly 只覆盖脚本本体过受限文法（CheckArgs 深度校验脚本内容，
+		// tools#81——flag 表与 NoBareOperands 看不到脚本串里的 w/W/e/r/R）；
+		// -f/--file 的脚本内容静态不可证，由钩子拒。
+		"sed": Policy{ReadOnly: true, CheckArgs: sedArgsCheck,
+			SafeFlags:   with(bools("-n", "-E", "-r", "-z", "-s", "--silent", "--quiet"), "-e", "string", "-f", "string", "--expression", "string", "--file", "string"),
+			UnsafeFlags: []string{"-i", "--in-place", "-i.bak", "-w", "--follow-symlinks"}},
+		"less": ro(bools("-N", "-R", "-F", "-X", "-S", "-i", "-n", "-E", "-q", "-Q", "-M", "-m", "-g", "-j", "-w", "-z", "-A", "-B", "-C")),
+		"jq":   ro(with(bools("-r", "-c", "-n", "-e", "-s", "-S", "-a", "-C", "-M", "--tab", "-j", "-0", "-f"), "--arg", "string", "--argjson", "string", "--slurpfile", "string", "--rawfile", "string", "--raw-input", "bool", "--jsonargs", "bool"), "--raw-output0", "-o", "--output", "-o="),
 		// awk/tee/rm/mv/cp/chmod 等写或不可证明命令刻意不在表（未知=非只读）
 	}
 

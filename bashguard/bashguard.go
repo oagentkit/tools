@@ -20,11 +20,13 @@
 // 「要不要二次确认」是调用方的策略决定；本包给的是「这条命令不可逆」这个事实。
 //
 // 上限 10K 字符（对标 ZCode：超长命令不进解析器）。超长路径带 Unevaluated
-// 标记 + 头/尾窗 best-effort 不可逆扫描——不静默 fail-open。
+// 标记（细分归因 OverLength / Unparsed，tools#80）+ 头/尾窗 best-effort
+// 不可逆扫描——不静默 fail-open。
 package bashguard
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	mvdan "mvdan.cc/sh/v3/syntax"
@@ -63,6 +65,15 @@ type Policy struct {
 	// AllowBareOperandsPrefix NoBareOperands 的豁免前缀（date 的 +FORMAT 形态：
 	// 裸操作数以 "+" 开头是格式串不是写目标）。前缀空串不放行任何操作数。
 	AllowBareOperandsPrefix []string
+	// CheckArgs 参数深度校验钩子（tools#81）：flag 表表达不了的 mini-language
+	// 参数面（sed 脚本：w/W 写文件、e/s///e 执行命令可藏于裸操作数与 -e/
+	// --expression 的**值**里，flag 白名单与 NoBareOperands 都看不到内容）。
+	// 收到完整 argv（含 flag 及其值），返回非空串=非只读原因。
+	//
+	// 调用时机：叶子路径（evalLeafPolicy）在白名单 flag 消费**之后**——未知
+	// flag 先被表拒，钩子只处理表放过来的形态；子命令/包装路径不调用。实现
+	// 必须自带 fail-closed 纪律（看不懂的一律拒），钩子内不执行任何命令。
+	CheckArgs func(name string, argv []string) string
 	// Destructive 该命令恒不可逆（删数据 / 写设备 / 关机 …）。
 	//
 	// 只在**不可逆规则表**（Table.Destructive）里有意义——只读表是只读表，
@@ -93,6 +104,28 @@ type Invocation struct {
 	Dynamic bool // 含动态词（argv 非字面）
 }
 
+// RedirInfo 重定向事实（观测面，tools#79）。
+//
+// 收编动机与 AllCalls 同型：重定向判定（`cat disk.img > /dev/sda`——写块设备
+// 走的是 Stmt.Redirs 不是调用面）此前集成方只能自己再 parse 一遍同一命令
+// （Analyze 内部一次 + 集成方一次），重复实现会漂、漂的那份决定门禁拦什么。
+// Decision.Redirs 给出全 AST 的重定向集，集成方在同一判定结果上做目标检查
+// （如 /dev/* 设备文件），解析 2→1。
+//
+// 语义边界：
+//   - 只读判定的保守结论不变——任何写重定向（Read=false）本身就把命令判非
+//     只读；本结构是给「非只读之后还要细分目标」的调用方的事实面；
+//   - heredoc（<< / <<- / <<<）的 Target 是定界符词，**体不在本结构**（体的
+//     动态展开由只读判定自身保守处理）；
+//   - &> / &>> 同时作用于 fd 1 与 2，FD 记 1（Op 已含全量信息）。
+type RedirInfo struct {
+	Op      string // 操作符字面（">" / ">>" / "&>" / "<" / "<<" / "<<<" …）
+	FD      int    // 作用的目标 fd：">" 默认 1、"2>" 为 2；{varname}> 形态为 -1（fd 由运行时变量决定）
+	Target  string // 目标词字面化文本（heredoc 为定界符；含展开时为拼接的部分文本，Dynamic=true）
+	Dynamic bool   // 目标词含动态展开（$()/反引号/$VAR）
+	Read    bool   // 读侧重定向（<、<<、<<-、<<<）：目标是被读的源，不产生写
+}
+
 // Decision 判定结果。
 type Decision struct {
 	// ReadOnly 命令可判只读（不执行任何写路径）。
@@ -116,7 +149,20 @@ type Decision struct {
 	// 压成同一个信号。调用方对未评估输入须按保守侧处理（如照常要二次确认），
 	// 不得当「已判安全」。超长路径另有头/尾窗 best-effort 扫描兜底（见
 	// overlongDecision）：窗口内命中的不可逆动作照常置 Destructive。
+	//
+	// 细分归因见 OverLength / Unparsed（tools#80）：未评估的伞标记在此，
+	// 两细分只回答「为什么没判」，两者置位时本标记必置位。
 	Unevaluated bool
+	// OverLength 命令超过 MaxCommandLen 未进解析器（tools#80）：Unevaluated
+	// 的细分归因之一。集成方据此区分「超长拒绝判定」与「解析失败拒绝判定」，
+	// 并与「判定完成没发现风险」（Unevaluated/OverLength/Unparsed 全 false）
+	// 相区分——拒绝判定（任一标记置位）时 ReadOnly=false 只是保守拒，命令
+	// 文本里的实际风险（如 10KB 注释填充后尾随的 rm -rf …）未被评估，调用方
+	// 须自行升级处置（如照常要确认）。
+	OverLength bool
+	// Unparsed 解析失败未进 AST 判定（tools#80）：Unevaluated 的细分归因之一，
+	// 语义同 OverLength（拒绝判定，须按保守侧处理）。
+	Unparsed bool
 	// Invocations 提取的调用序列（观测/风险面）。
 	//
 	// ⚠️ 这是**判定路径**的消费序列，不是全量事实：判定在首个非只读调用上
@@ -143,6 +189,15 @@ type Decision struct {
 	//   - Dynamic=true 的调用（参数含 $()/反引号/$VAR）同样入列——动态参数
 	//     本身就是风险信号。
 	AllCalls []Invocation
+	// Redirs 全 AST 的重定向事实集（syntax.Walk，tools#79）：语句级、子 shell
+	// (…)、{ …; }、命令替换 $(…) 里的重定向全部可见，与判定路径是否提前返回
+	// 无关。服务集成方的重定向目标判定（写块设备等走 Redirs 不走调用面），
+	// 免集成方为拿重定向再 parse 一遍同一命令（与 AllCalls 的收编动机同型）。
+	//
+	// 语义边界见 RedirInfo：heredoc 体不在此结构；写重定向（Read=false）本身
+	// 已使命令非只读，本事实面供非只读之后的目标细分。超长路径为头/尾窗
+	// best-effort 收集（重叠区去重，与 AllCalls 同法）；解析失败为空。
+	Redirs []RedirInfo
 }
 
 // collectAllCalls 全 AST 收集 simple command（syntax.Walk，f 为 nil 返回空）。
@@ -184,6 +239,52 @@ func collectAllCalls(f *mvdan.File) []Invocation {
 	return out
 }
 
+// collectRedirs 全 AST 收集重定向事实（syntax.Walk，f 为 nil 返回空）。
+func collectRedirs(f *mvdan.File) []RedirInfo {
+	if f == nil {
+		return nil
+	}
+	var out []RedirInfo
+	mvdan.Walk(f, func(n mvdan.Node) bool {
+		r, ok := n.(*mvdan.Redirect)
+		if !ok {
+			return true // 继续下探：子 shell / { …; } / $(…) 里可有重定向
+		}
+		out = append(out, redirInfo(r))
+		return true
+	})
+	return out
+}
+
+// redirInfo 单条重定向的事实化：操作符字面、目标 fd、目标词字面化。
+func redirInfo(r *mvdan.Redirect) RedirInfo {
+	info := RedirInfo{Op: r.Op.String(), Read: readRedirOps[r.Op]}
+	switch {
+	case r.N != nil: // 显式 fd（2> 形态）；{varname}> 形态 fd 由运行时变量决定
+		if fd, err := strconv.Atoi(r.N.Value); err == nil {
+			info.FD = fd
+		} else {
+			info.FD = -1
+		}
+	default:
+		info.FD = defaultFD(r.Op)
+	}
+	if r.Word != nil {
+		info.Target, info.Dynamic = literalWord(r.Word)
+	}
+	return info
+}
+
+// defaultFD 无显式 fd 时各重定向操作符的缺省目标 fd；&>/&>> 族同时作用于
+// 1 与 2，记 1（Op 字面已含全量信息）。
+func defaultFD(op mvdan.RedirOperator) int {
+	switch op {
+	case mvdan.RdrIn, mvdan.DplIn, mvdan.Hdoc, mvdan.DashHdoc, mvdan.WordHdoc:
+		return 0
+	}
+	return 1
+}
+
 // Analyze 静态解析与判定。超长/解析失败返回非只读（保守）且 Unevaluated=true。
 func Analyze(cmdStr string, t *Table) Decision {
 	if t == nil {
@@ -195,9 +296,9 @@ func Analyze(cmdStr string, t *Table) Decision {
 	parser := mvdan.NewParser(mvdan.Variant(mvdan.LangBash))
 	f, err := parser.Parse(strings.NewReader(cmdStr), "")
 	if err != nil {
-		return Decision{Reason: fmt.Sprintf("解析失败: %v", err), Unevaluated: true}
+		return Decision{Reason: fmt.Sprintf("解析失败: %v", err), Unevaluated: true, Unparsed: true}
 	}
-	d := Decision{ReadOnly: true, AllCalls: collectAllCalls(f)}
+	d := Decision{ReadOnly: true, AllCalls: collectAllCalls(f), Redirs: collectRedirs(f)}
 	for _, stmt := range f.Stmts {
 		if reason := t.evalStmt(stmt, &d.Invocations); reason != "" {
 			d.ReadOnly = false
@@ -230,6 +331,7 @@ func (t *Table) overlongDecision(cmdStr string) Decision {
 	d := Decision{
 		Reason:      fmt.Sprintf("命令超长（%d 字节 > %d 上限），不进解析器", len(cmdStr), MaxCommandLen),
 		Unevaluated: true,
+		OverLength:  true,
 	}
 	seen := map[string]bool{}
 	for _, w := range truncatedWindows(cmdStr) {
@@ -247,6 +349,14 @@ func (t *Table) overlongDecision(cmdStr string) Decision {
 			}
 			seen[key] = true
 			d.AllCalls = append(d.AllCalls, inv)
+		}
+		for _, ri := range collectRedirs(f) { // 重定向事实面同法收集去重（tools#79）
+			key := fmt.Sprintf("%s\x00%d\x00%s\x00%v\x00%v", ri.Op, ri.FD, ri.Target, ri.Dynamic, ri.Read)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			d.Redirs = append(d.Redirs, ri)
 		}
 	}
 	if ok, why := t.destructiveScan(d.AllCalls); ok {
@@ -498,11 +608,17 @@ func evalSubcommandPolicy(name string, argv []string, pol Policy) string {
 	return evalPolicy(name+" "+sub, rest, subPol)
 }
 
-// evalLeafPolicy 叶子命令：白名单 flag 消费（未知即拒）+ 裸操作数守卫。
+// evalLeafPolicy 叶子命令：白名单 flag 消费（未知即拒）+ 参数深度校验钩子 +
+// 裸操作数守卫。
 func evalLeafPolicy(name string, argv []string, pol Policy) string {
 	operands, reason := consumeFlags(name, argv, pol)
 	if reason != "" {
 		return reason
+	}
+	if pol.CheckArgs != nil {
+		if reason := pol.CheckArgs(name, argv); reason != "" {
+			return reason
+		}
 	}
 	if pol.NoBareOperands {
 		for _, op := range operands {
