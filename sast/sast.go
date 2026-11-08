@@ -23,6 +23,7 @@ import (
 	"github.com/oagentkit/textx/reportutil"
 	"github.com/oagentkit/textx/textutil"
 	"github.com/oekit/concurrency/async"
+	"github.com/oekit/logx"
 )
 
 // Config SAST 工具配置（bin 路径来自部署方信任源；全空 = 功能关闭）。
@@ -45,7 +46,8 @@ func (c Config) TimeoutResolved() time.Duration {
 	return 120 * time.Second
 }
 
-// Logger 最小日志口（logx.Logger 满足）。
+// Logger 最小日志口（logx.Logger 满足）。Scan 对 nil 安全：nil = 静默
+// （tools#61，走 logx.Nop 兜底）。
 type Logger interface {
 	Info(msg string, kv ...any)
 	Warn(msg string, kv ...any)
@@ -78,7 +80,13 @@ const maxFindingsPerTool = 50
 // deepen 到 merge-base），为空退化为全仓 --no-git 扫描。paths 为本次审查实际
 // 覆盖的变更文件清单（diff 聚焦——全仓扫描在大仓上既慢又淹没信噪比；nil/空 =
 // 全仓）。未配置 config 的 semgrep 不产结果（不算覆盖缺口，只告警）。
+// log nil 安全（tools#61，仓内 nil-safe logger 约定同 Pool.logger()）：
+// nil 走 logx.Nop 静默兜底——Config「全空 = 功能关闭」导向最小装配，
+// 可选形象的 logger 传 nil 不得 panic。
 func Scan(ctx context.Context, cfg Config, dir, baseRef string, paths []string, log Logger) []ToolResult {
+	if log == nil {
+		log = logx.Nop()
+	}
 	if !cfg.Enabled() {
 		return nil
 	}
@@ -225,10 +233,19 @@ func runSemgrep(ctx context.Context, cfg Config, dir string, paths []string,
 
 	res := ToolResult{Tool: "semgrep", Findings: []Finding{}}
 	args := []string{"scan", "--json", "--quiet", "--config", cfg.SemgrepConfig}
+	// 目标清单前必须插 "--" 端界符（tools#62，argument injection——与 procx
+	// 拒绝 "-" 开头 argv[0]、badRefName 守卫 --log-opts 同一纪律）：聚焦路径
+	// 是 PR diff 的攻击者可影响清单（PR 可创建 "--exclude" 这类 POSIX 合法
+	// 文件名），无端界符时 argparse/click 把 "-" 开头 token 当 flag——已知
+	// 取值 flag（semgrep --exclude 等）会静默吞掉后续真实路径，含硬编码密钥
+	// 的文件被排除出扫描、finding 永不进裁决层（fail-open 规避）。"--" 之后
+	// 一律按 positional 目标处理（semgrep CLI 支持，argparse/click 标准行为），
+	// "-" 开头文件名照常入扫。
 	if focused := FocusPaths(paths); len(focused) > 0 {
+		args = append(args, "--")
 		args = append(args, focused...)
 	} else {
-		args = append(args, ".")
+		args = append(args, "--", ".")
 	}
 	stdout, stderr, code, err := procx.Run(ctx, procx.RunRequest{
 		Argv:    append([]string{cfg.SemgrepBin}, args...),
@@ -278,7 +295,9 @@ func runSemgrep(ctx context.Context, cfg Config, dir string, paths []string,
 
 // FocusPaths 聚焦文件清单整形（存在性不做校验——以 diff 清单为准，缺失文件
 // semgrep 自行忽略；>semgrepMaxPaths 回退 nil = 全仓；含 ".." 的路径剔除防
-// 路径穿越出工作副本）。
+// 路径穿越出工作副本）。"-" 开头的文件名刻意保留：option-inert 由 runSemgrep
+// 的 argv "--" 端界符保证（tools#62），在此剔除反而留下「改个名就逃出聚焦
+// 扫描」的内容逃出面。
 func FocusPaths(paths []string) []string {
 	if len(paths) == 0 || len(paths) > semgrepMaxPaths {
 		return nil
