@@ -63,6 +63,15 @@ type Policy struct {
 	// AllowBareOperandsPrefix NoBareOperands 的豁免前缀（date 的 +FORMAT 形态：
 	// 裸操作数以 "+" 开头是格式串不是写目标）。前缀空串不放行任何操作数。
 	AllowBareOperandsPrefix []string
+	// CheckArgs 参数深度校验钩子（tools#81）：flag 表表达不了的 mini-language
+	// 参数面（sed 脚本：w/W 写文件、e/s///e 执行命令可藏于裸操作数与 -e/
+	// --expression 的**值**里，flag 白名单与 NoBareOperands 都看不到内容）。
+	// 收到完整 argv（含 flag 及其值），返回非空串=非只读原因。
+	//
+	// 调用时机：叶子路径（evalLeafPolicy）在白名单 flag 消费**之后**——未知
+	// flag 先被表拒，钩子只处理表放过来的形态；子命令/包装路径不调用。实现
+	// 必须自带 fail-closed 纪律（看不懂的一律拒），钩子内不执行任何命令。
+	CheckArgs func(name string, argv []string) string
 	// Destructive 该命令恒不可逆（删数据 / 写设备 / 关机 …）。
 	//
 	// 只在**不可逆规则表**（Table.Destructive）里有意义——只读表是只读表，
@@ -498,11 +507,17 @@ func evalSubcommandPolicy(name string, argv []string, pol Policy) string {
 	return evalPolicy(name+" "+sub, rest, subPol)
 }
 
-// evalLeafPolicy 叶子命令：白名单 flag 消费（未知即拒）+ 裸操作数守卫。
+// evalLeafPolicy 叶子命令：白名单 flag 消费（未知即拒）+ 参数深度校验钩子 +
+// 裸操作数守卫。
 func evalLeafPolicy(name string, argv []string, pol Policy) string {
 	operands, reason := consumeFlags(name, argv, pol)
 	if reason != "" {
 		return reason
+	}
+	if pol.CheckArgs != nil {
+		if reason := pol.CheckArgs(name, argv); reason != "" {
+			return reason
+		}
 	}
 	if pol.NoBareOperands {
 		for _, op := range operands {
