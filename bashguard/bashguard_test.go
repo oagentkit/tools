@@ -439,3 +439,87 @@ func TestUnevaluatedRefusalMarkers(t *testing.T) {
 		t.Fatalf("超长窗口命中 rm -rf 应 OverLength+Unevaluated+Destructive: %+v", d)
 	}
 }
+
+// TestDecisionRedirsFacts 回归（tools#79）：Decision.Redirs 全 AST 重定向事实
+// 面——集成方（如确认门禁的设备文件检查）在同一判定结果上做重定向目标判定，
+// 免为拿 Stmt.Redirs 把同一命令再 parse 一遍（与 AllCalls 的收编动机同型）。
+func TestDecisionRedirsFacts(t *testing.T) {
+	// issue 场景：写块设备走的是重定向不是调用面
+	d := Analyze("cat disk.img > /dev/sda", nil)
+	if len(d.Redirs) != 1 {
+		t.Fatalf("应有一条重定向事实: %+v", d.Redirs)
+	}
+	if ri := d.Redirs[0]; ri.Op != ">" || ri.FD != 1 || ri.Target != "/dev/sda" || ri.Read || ri.Dynamic {
+		t.Fatalf("写重定向事实不对: %+v", ri)
+	}
+	// 显式 fd 与操作符字面
+	d = Analyze("cmd 2>> err.log", nil)
+	if len(d.Redirs) != 1 {
+		t.Fatalf("应有一条重定向事实: %+v", d.Redirs)
+	}
+	if ri := d.Redirs[0]; ri.Op != ">>" || ri.FD != 2 || ri.Target != "err.log" || ri.Read {
+		t.Fatalf("fd 追加重定向事实不对: %+v", ri)
+	}
+	// 读侧重定向标记 Read
+	d = Analyze("grep x < input.txt", nil)
+	if len(d.Redirs) != 1 {
+		t.Fatalf("应有一条重定向事实: %+v", d.Redirs)
+	}
+	if ri := d.Redirs[0]; !ri.Read || ri.FD != 0 || ri.Target != "input.txt" {
+		t.Fatalf("读侧重定向事实不对: %+v", ri)
+	}
+	// heredoc：Target 是定界符词（体不在本结构，由只读判定自身保守处理）
+	d = Analyze("cat <<'EOF'\nbody\nEOF", nil)
+	if len(d.Redirs) != 1 {
+		t.Fatalf("应有一条重定向事实: %+v", d.Redirs)
+	}
+	if ri := d.Redirs[0]; ri.Op != "<<" || !ri.Read || ri.Target != "EOF" {
+		t.Fatalf("heredoc 事实不对: %+v", ri)
+	}
+	// 动态目标词带 Dynamic 标记
+	d = Analyze("cmd > $F", nil)
+	if len(d.Redirs) != 1 || !d.Redirs[0].Dynamic {
+		t.Fatalf("动态目标应标记 Dynamic: %+v", d.Redirs)
+	}
+	// &> 族：缺省 fd 记 1，Op 字面含全量信息
+	d = Analyze("cmd &> all.log", nil)
+	if len(d.Redirs) != 1 || d.Redirs[0].Op != "&>" || d.Redirs[0].FD != 1 {
+		t.Fatalf("&> 事实不对: %+v", d.Redirs)
+	}
+	// 子 shell / 管道后半的重定向同样可见（全 AST，与判定路径提前返回无关）
+	d = Analyze("(echo hi) > /tmp/x", nil)
+	if len(d.Redirs) != 1 || d.Redirs[0].Target != "/tmp/x" {
+		t.Fatalf("子 shell 重定向应可见: %+v", d.Redirs)
+	}
+	d = Analyze("cat f | sort > out.txt", nil)
+	if len(d.Redirs) != 1 || d.Redirs[0].Target != "out.txt" {
+		t.Fatalf("管道后半重定向应可见: %+v", d.Redirs)
+	}
+	// 命令替换内的重定向可见
+	d = Analyze("echo $(cat f > /tmp/inner)", nil)
+	if len(d.Redirs) != 1 || d.Redirs[0].Target != "/tmp/inner" {
+		t.Fatalf("命令替换内重定向应可见: %+v", d.Redirs)
+	}
+	// 无重定向命令为空
+	if d := Analyze("ls -la", nil); len(d.Redirs) != 0 {
+		t.Fatalf("无重定向应为空: %+v", d.Redirs)
+	}
+	// 超长路径：尾窗 best-effort 收集（去重）
+	payload := strings.Repeat("# pad\n", MaxCommandLen/6) + "cat f > /tmp/tail-target"
+	d = Analyze(payload, nil)
+	if len(d.Redirs) != 1 || d.Redirs[0].Target != "/tmp/tail-target" {
+		t.Fatalf("超长尾窗重定向事实应收集: %+v", d.Redirs)
+	}
+	// 集成方目标检查示例：写 /dev/* 且非 null/zero → 命中（免二次解析）
+	d = Analyze("cat disk.img > /dev/sda", nil)
+	hit := false
+	for _, ri := range d.Redirs {
+		if !ri.Read && strings.HasPrefix(ri.Target, "/dev/") &&
+			ri.Target != "/dev/null" && ri.Target != "/dev/zero" {
+			hit = true
+		}
+	}
+	if !hit {
+		t.Fatal("集成方设备文件检查应命中 /dev/sda 写重定向")
+	}
+}
