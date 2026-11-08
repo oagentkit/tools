@@ -73,10 +73,28 @@ func (k *Kimi) Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 		return nil, err
 	}
 	if lastAssistant == "" {
+		// 终态丢失守门（tools#83）：kimi 无协议终态事件，assistant 消息行
+		// 就是唯一的正文来源——stdout 里**存在** assistant 消息形状的行却没
+		// 进 lastAssistant（单行超 1MB 被丢弃是主形态：agent 任务产出大文件/
+		// 长 diff 的最终消息即可触发；解析漂移亦然），说明 OnLine 流丢了行，
+		// 拒绝把整条 JSONL 事件流原文当最终回答兜底
+		if lost := lostTerminalErr("kimi", stdout, false, kimiTerminalLine); lost != nil {
+			return nil, lost
+		}
 		// stream-json 不可用（旧版本/文本模式）：全文兜底
 		lastAssistant = strings.TrimSpace(stdout)
 	}
 	return &RunResult{Text: lastAssistant, ExitCode: code, Raw: []byte(stdout), Stderr: stderrTail(stderr)}, nil
+}
+
+// kimiTerminalLine 正文形状判定（tools#83 守门用）：assistant 消息行（与
+// OnLine 的取文判据同款：role=assistant 且 content 非空）。
+func kimiTerminalLine(line string) bool {
+	var msg kimiMessage
+	if err := json.Unmarshal([]byte(line), &msg); err != nil {
+		return false
+	}
+	return msg.Role == "assistant" && msg.Content != ""
 }
 
 // kimiMessage stream-json 消息行。

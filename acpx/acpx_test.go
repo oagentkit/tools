@@ -468,8 +468,10 @@ func TestCodexErrorEventExitZero(t *testing.T) {
 }
 
 func TestClaudeIsErrorResultForwarded(t *testing.T) {
-	// result.is_error → EventError 转发（transcript 可排障）；0 退出时成功/失败
-	// 判定不动（result 优先策略为既有契约，处置归消费方）。
+	// result.is_error → EventError 转发（transcript 可排障）**并**如实报错
+	//（tools#82：此前 0 退出 + is_error 被当成功返回，错误文案流入下游
+	// agent 循环——huginn 教训形态；现与 codex/mimo「流内 error 如实报错」
+	// 同纪律。旧断言 err==nil 钉的是缺陷本身，随 #82 一并改钉）。
 	bin := fakeCLI(t, `cat <<'JSONL'
 {"type":"result","result":"任务失败：权限不足","is_error":true}
 JSONL
@@ -478,15 +480,51 @@ JSONL
 	c.Bin = bin
 
 	var events []Event
-	res, err := c.Run(context.Background(), RunRequest{Prompt: "x", OnEvent: func(e Event) { events = append(events, e) }})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Text != "任务失败：权限不足" {
-		t.Fatalf("Text = %q", res.Text)
+	_, err := c.Run(context.Background(), RunRequest{Prompt: "x", OnEvent: func(e Event) { events = append(events, e) }})
+	if err == nil || !strings.Contains(err.Error(), "任务失败：权限不足") {
+		t.Fatalf("exit=0 的 is_error result 应如实报错（tools#82）: %v", err)
 	}
 	if len(events) != 1 || events[0].Type != EventError {
 		t.Fatalf("is_error result 应以 EventError 转发: %v", events)
+	}
+}
+
+func TestClaudeIsErrorDefaultUsageErrors(t *testing.T) {
+	// 默认用法（OnEvent=nil）下 is_error result 不得静默当成功：错误事件
+	// 通道不存在，唯一信号就是 Run 的 error（tools#82 的核心场景——配额
+	// 耗尽的 claude -p 把错误文案当答案注入下游 agent 循环）。
+	bin := fakeCLI(t, `cat <<'JSONL'
+{"type":"result","result":"API Error: quota exceeded","is_error":true}
+JSONL
+`)
+	c := NewClaudeCode()
+	c.Bin = bin
+
+	res, err := c.Run(context.Background(), RunRequest{Prompt: "x"})
+	if err == nil || !strings.Contains(err.Error(), "quota exceeded") {
+		t.Fatalf("默认用法下 is_error result 应报错: %v", err)
+	}
+	if res != nil {
+		t.Fatalf("报错路径不得同时返回成功结果: %+v", res)
+	}
+}
+
+func TestClaudeSuccessResultStillSucceeds(t *testing.T) {
+	// 对照组：is_error=false 的正常 result 语义不变（tools#82 只收紧失败形态）。
+	bin := fakeCLI(t, `cat <<'JSONL'
+{"type":"system","subtype":"init","session_id":"sess-1"}
+{"type":"result","result":"任务完成","is_error":false,"session_id":"sess-1"}
+JSONL
+`)
+	c := NewClaudeCode()
+	c.Bin = bin
+
+	res, err := c.Run(context.Background(), RunRequest{Prompt: "x"})
+	if err != nil {
+		t.Fatalf("正常 result 不得报错: %v", err)
+	}
+	if res.Text != "任务完成" || res.SessionID != "sess-1" {
+		t.Fatalf("Text = %q, SessionID = %q", res.Text, res.SessionID)
 	}
 }
 

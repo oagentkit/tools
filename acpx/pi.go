@@ -157,16 +157,35 @@ func (s *piStream) onAssistantEnd(ev *piEvent, line string) {
 	}
 }
 
+// piTerminalLine 终态形状判定（tools#83 守门用）：assistant 的 message_end
+// 事件行（与 handleLine 的终态判据同款）。
+func piTerminalLine(line string) bool {
+	var ev piEvent
+	if err := json.Unmarshal([]byte(line), &ev); err != nil {
+		return false
+	}
+	return ev.Type == "message_end" && ev.Message != nil && ev.Message.Role == "assistant"
+}
+
 // finalize 收尾装配（三段式骨架）：中止仅在无终态时如实报错（pi 中止形态
 // 可能 exit 仍为 0）；assistant message_end 到达即权威——文本可为空（纯
 // thinking 收尾/末轮以工具调用结束不是空壳，曾以 lastText=="" 误触兜底把
-// 整段 JSONL 事件流当正文返回）；无终态全文兜底。
+// 整段 JSONL 事件流当正文返回）；无终态全文兜底前先过终态丢失守门
+// （tools#83：stdout 里有 assistant message_end 形状却没被识别 = 单行超限
+// 被丢或协议漂移，拒绝把事件流原文当回答）。
 func (s *piStream) finalize(stdout, stderr string, code int, err error) (*RunResult, error) {
 	var streamErr error
 	if s.abortLine != "" && !s.sawAssistant {
 		streamErr = streamError("pi", "中止", textutil.TruncEllipsis(s.abortLine, 400))
 	}
 	s.usage.CostUSD = s.cost
+	// 守门只在无执行错且无中止错时接管：那两条路径 finalizeStream 自会如实
+	// 上抛，不因终态形状在 stdout 而改写错误语义
+	if err == nil && streamErr == nil && !s.sawAssistant {
+		if lost := lostTerminalErr("pi", stdout, false, piTerminalLine); lost != nil {
+			return nil, lost
+		}
+	}
 	return finalizeStream(stdout, stderr, code, err,
 		&RunResult{Text: s.lastText, SessionID: s.sessionID, Usage: s.usage},
 		s.sawAssistant, streamErr)

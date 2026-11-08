@@ -67,7 +67,8 @@ func (c *ClaudeCode) buildArgv(req RunRequest) []string {
 type claudeStream struct {
 	req       RunRequest
 	result    *RunResult
-	sawResult bool // result 事件是否到达（init-only 空壳不具备终态语义）
+	sawResult bool   // result 事件是否到达（init-only 空壳不具备终态语义）
+	errMsg    string // is_error result 的详情文本（tools#82：装配 streamErr 上抛）
 }
 
 // handleLine 单行 stream-json 事件解析（非事件行忽略）。
@@ -108,7 +109,8 @@ func (s *claudeStream) onAssistant(ev *claudeEvent, line string) {
 	}
 }
 
-// onResult 终态事件：结果/用量落状态机并全量转发（is_error → EventError）。
+// onResult 终态事件：结果/用量落状态机并全量转发（is_error → EventError +
+// 装配 streamErr 如实上抛）。
 func (s *claudeStream) onResult(ev *claudeEvent, line string) {
 	s.sawResult = true // 终态事件真的到达过（区分 init-only 空壳）
 	r := &RunResult{Text: ev.Result, SessionID: ev.SessionID}
@@ -119,8 +121,16 @@ func (s *claudeStream) onResult(ev *claudeEvent, line string) {
 		r.SessionID = s.result.SessionID
 	}
 	s.result = r
-	// is_error result 全量转发（transcript 可排障）；成功/失败判定不动——
-	// 非 0 退出已有"result 优先"策略，0 退出 + is_error 的处置归消费方
+	// is_error result 全量转发（transcript 可排障）**并**装配 streamErr——
+	// 此前只转发事件、成功/失败判定不动，exit=0 的 is_error 跑（配额耗尽/
+	// 权限不足）被当成功返回：默认用法（OnEvent=nil）下错误事件通道根本
+	// 不存在，错误文案被当最终答案注入下游 agent 循环——正是 run.go
+	// streamError 注释自述的 huginn 教训形态（tools#82）。与 codex/mimo
+	// 「exit=0 但流内 error 如实报错」同一纪律，对齐其测试钉法。
+	// 非 0 退出已有「result 优先」策略（finalizeStream 终态优先段），不受影响。
+	if ev.IsError {
+		s.errMsg = ev.Result
+	}
 	typ := EventResult
 	if ev.IsError {
 		typ = EventError
@@ -128,11 +138,32 @@ func (s *claudeStream) onResult(ev *claudeEvent, line string) {
 	emit(s.req, Event{Type: typ, Text: ev.Result, Raw: json.RawMessage(line)})
 }
 
+// claudeTerminalLine 终态形状判定（tools#83 守门用）：顶层 type=result 的
+// 事件行。整行 JSON 解析后看**顶层**字段——assistant 文本里内嵌的
+// {"type":"result"} 字符串不影响判定。
+func claudeTerminalLine(line string) bool {
+	var probe struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal([]byte(line), &probe); err != nil {
+		return false
+	}
+	return probe.Type == "result"
+}
+
 // finalize 收尾装配（三段式骨架）：终态 = result 事件真的到达（init-only
 // 空壳不具备终态语义）；终态优先无条件于文本非空（空 result 文本是合法成功
-// ——is_error 的处置归消费方，经 EventError 转发）；无终态全文兜底。
+// ——成功语义）；is_error 终态如实报错（tools#82，见 onResult）；无终态时
+// 先过终态丢失守门（tools#83）再全文兜底。
 func (s *claudeStream) finalize(stdout, stderr string, code int, err error) (*RunResult, error) {
-	return finalizeStream(stdout, stderr, code, err, s.result, s.sawResult && s.result != nil, nil)
+	// 守门只在无执行错时接管：执行错路径（超时/非零退出）finalizeStream
+	// 自会如实上抛，不因终态形状在 stdout 而改写错误语义
+	if err == nil {
+		if lost := lostTerminalErr("claude", stdout, s.sawResult, claudeTerminalLine); lost != nil {
+			return nil, lost
+		}
+	}
+	return finalizeStream(stdout, stderr, code, err, s.result, s.sawResult && s.result != nil, streamError("claude", "运行错误", s.errMsg))
 }
 
 // claudeEvent stream-json 事件（容错解析：只取需要的字段）。
