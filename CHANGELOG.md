@@ -2,11 +2,93 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.14.0] — 2026-11-09
+
+### 修复：tools 第三轮 issue 清零二波（#82 #83）
+
+* fix(acpx): claude is_error result 如实上抛并接入终态丢失守门（#82 #83）
+* fix(acpx): 事件流兜底前过终态丢失守门，超长终态行被丢不再把事件流原文当最终回答（#83）
+---------
+Co-authored-by: Murphy-Yi <zhangyi@Murphy-YideMac-Mini.local>
+
+### 修复：tools 第三轮 issue 清零（#79 #80 #81）
+
+* fix(bashguard): sed 只读档深度校验脚本受限文法——w/W/e/r/R 原语不再经裸操作数/-e/-f 放行（#81）
+sed 是含 I/O 原语的 mini-language（w/W 写文件、GNU e 与 s///e 执行 shell 命令、r/R 注入外部文件内容），脚本串以裸操作数/-e/--expression/-f 多路到达，flag 白名单+NoBareOperands 只看得到「有没有操作数」，sed -n 'w /tmp/x' /etc/hosts 曾整体判只读（实测文件真被写出）。
+- Policy 新增 CheckArgs 参数深度校验钩子：叶子路径在白名单 flag 消费后调用，收完整 argv，返回非空=非只读原因；实现须自带 fail-closed 纪律
+- sed 表项接 sedArgsCheck：脚本按受限文法整体校验（s///[gpiIMm0-9]/y////p/d + 数字/$/re/ 地址、逗号范围、! 否定、任意分隔符），文法外一律拒（{}块、分支标签、~/+N 扩展地址、未闭合、地址悬空）；w/W/e/r/R 与 s 的 w/e flag 点名拒因；-f/--file 脚本内容静态不可证直接拒；-- 后首操作数按 sed 语义定位脚本，其余裸操作数是输入文件不校验
+- 白名单而非黑名单：w/W/e/r/R 加行地址加 -e/-f 的组合面太大，黑名单漏一则全漏
+回归：TestSedScriptReadOnlyGate——issue 四条复现（w f / 1e id / -e 'w f' / 1w f）全拒，sed -n '1,2p' F 等受限文法内脚本仍只读，env sed 剥壳同判。
+* feat(bashguard): Decision 增加 OverLength/Unparsed 拒绝判定细分标记（#80）
+超长（>MaxCommandLen）与解析失败此前只有 Unevaluated 伞标记（tools#45），集成方无法区分「判定完成没发现风险」与「拒绝判定」——jumpserver-kit 确认门据 AllCalls/Invocations 全空把 10KB 注释填充撑过长度闸、文本里尾随 rm -rf 的命令归 UNKNOWN 免确认（填充绕过实测）。
+- OverLength：len > MaxCommandLen 未进解析器时置位（overlongDecision）
+- Unparsed：解析失败未进 AST 时置位
+- 两者是 Unevaluated 的细分归因（为何没判），置位时伞标记必并存；Unevaluated/OverLength/Unparsed 全 false 才是「判定完成」
+- tools#45 行为不回退：超长仍带头/尾窗 best-effort 不可逆扫描，命中照常置 Destructive 且与细分标记并存；Risk() 语义不变
+回归：TestUnevaluatedRefusalMarkers——超长/解析失败各自置位且互斥、判定完成（只读/写/不可逆/sed 拒）三标记全 false、超长窗口命中 rm -rf 仍 Destructive+OverLength 并存。
+* feat(bashguard): Decision.Redirs 全 AST 重定向事实面，集成方重定向判定免二次解析（#79）
+#35 收编 AllCalls 后集成方仍有一项独立判定要做不了：重定向目标检查（cat disk.img > /dev/sda 写块设备走 Stmt.Redirs 不走调用面），此前只能自己再 parse 一遍同一命令（Analyze 内部一次 + 集成方一次）；AllCalls 只收 CallExpr，Redirs 不在其列。
+- Decision 新增 Redirs []RedirInfo：syntax.Walk 全 AST 收集（语句级/子 shell/{...}/$(...) 内全部可见，与判定路径提前返回无关），与 AllCalls 收编动机同型——重复实现会漂、漂的那份决定门禁拦什么
+- RedirInfo 字段：Op 操作符字面 / FD 目标 fd（2> 为 2，{varname}> 为 -1，&> 族记 1）/ Target 目标词字面化（heredoc 为定界符，体不在本结构）/ Dynamic 展开标记 / Read 读侧标记
+- 超长路径头/尾窗 best-effort 收集（重叠区去重，与 AllCalls 同法）；解析失败为空
+- 语义边界：写重定向（Read=false）本身已判非只读，本事实面供非只读之后的目标细分（如 /dev/* 且非 null/zero → 升级处置）；issue 的方案二（上游直接判设备文件）按 issue 意见「前者更好」取方案一，判定策略留给集成方
+回归：TestDecisionRedirsFacts——> /dev/sda 目标事实、2>>/fd、读侧标记、heredoc 定界符、动态目标、&>、子 shell/管道后半/命令替换内可见、超长尾窗收集、集成方设备文件检查示例免二次解析。
+
+- 杂务(deps)：依赖地板追到最新——github.com/oekit/pkg v0.40.0
+
+| 依赖 | 现地板 | 抬到 |
+|---|---|---|
+| `github.com/oekit/pkg` | `v0.39.0` | `v0.40.0` |
+## 为什么
+矩阵的**发版时刻地板时效**门禁（`verify_tag_floor --ref HEAD`）要求：各仓 HEAD
+（= 下次发版会发出去的内容）的依赖地板，相对那一刻的依赖最新版本，不能已落后。
+oekit 基座与矩阵模块都在高频发版 ⇒ 地板是**跑步机**，落后一格就会判红。
+## 兼容性实测
+本工具在提交前跑完 `go build` / `go vet` / `go test -race -count=1 ./...`（全绿才提交）
+与 `go mod tidy -diff`（无漂移）⇒ 改动**只影响依赖版本**，零行为差异。
+只改 `go.mod` / `go.sum` ⇒ 不需要 CHANGELOG 条目（版本段由下次发版的 `prewrite` 生成）。
+Co-authored-by: Murphy-Yi <zhangyi@Murphy-YideMac-Mini.local>
+
+- 杂务(deps)：依赖地板追到最新——github.com/oagentkit/textx v0.10.5
+
+| 依赖 | 现地板 | 抬到 |
+|---|---|---|
+| `github.com/oagentkit/textx` | `v0.10.4` | `v0.10.5` |
+| `github.com/oekit/concurrency` | `v0.30.1` | `v0.31.0` |
+## 为什么
+矩阵的**发版时刻地板时效**门禁（`verify_tag_floor --ref HEAD`）要求：各仓 HEAD
+（= 下次发版会发出去的内容）的依赖地板，相对那一刻的依赖最新版本，不能已落后。
+oekit 基座与矩阵模块都在高频发版 ⇒ 地板是**跑步机**，落后一格就会判红。
+## 兼容性实测
+本工具在提交前跑完 `go build` / `go vet` / `go test -race -count=1 ./...`（全绿才提交）
+与 `go mod tidy -diff`（无漂移）⇒ 改动**只影响依赖版本**，零行为差异。
+只改 `go.mod` / `go.sum` ⇒ 不需要 CHANGELOG 条目（版本段由下次发版的 `prewrite` 生成）。
+Co-authored-by: Murphy-Yi <zhangyi@Murphy-YideMac-Mini.local>
+
+- 杂务(deps)：依赖地板追到最新——github.com/oagentkit/guardx v0.23.4
+
+| 依赖 | 现地板 | 抬到 |
+|---|---|---|
+| `github.com/oagentkit/guardx` | `v0.23.3` | `v0.23.4` |
+| `github.com/oagentkit/runtime` | `v0.12.3` | `v0.12.4` |
+| `github.com/oagentkit/textx` | `v0.10.3` | `v0.10.4` |
+| `github.com/oekit/concurrency` | `v0.29.0` | `v0.30.1` |
+| `github.com/oekit/logx` | `v0.8.11` | `v0.8.12` |
+| `github.com/oekit/pkg` | `v0.38.0` | `v0.39.0` |
+## 为什么
+矩阵的**发版时刻地板时效**门禁（`verify_tag_floor --ref HEAD`）要求：各仓 HEAD
+（= 下次发版会发出去的内容）的依赖地板，相对那一刻的依赖最新版本，不能已落后。
+oekit 基座与矩阵模块都在高频发版 ⇒ 地板是**跑步机**，落后一格就会判红。
+## 兼容性实测
+本工具在提交前跑完 `go build` / `go vet` / `go test -race -count=1 ./...`（全绿才提交）
+与 `go mod tidy -diff`（无漂移）⇒ 改动**只影响依赖版本**，零行为差异。
+只改 `go.mod` / `go.sum` ⇒ 不需要 CHANGELOG 条目（版本段由下次发版的 `prewrite` 生成）。
+Co-authored-by: Murphy-Yi <zhangyi@Murphy-YideMac-Mini.local>
+
+
 ## [v0.13.4] — 2026-11-08
 
-### 依赖地板：oekit 基座追平——pkg v0.38.0 / logx v0.8.11 / concurrency v0.29.0
-
-oekit BOM v0.2.11 兼容地板门禁（oekit#163）对齐轮；无代码变更。
+- 与 v0.13.3 相比无代码差异（版本号/打包变更）
 
 ## [v0.13.3] — 2026-11-08
 
