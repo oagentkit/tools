@@ -34,6 +34,22 @@ sed 是含 I/O 原语的 mini-language（w/W 写文件、GNU e 与 s///e 执行 
 - 语义边界：写重定向（Read=false）本身已判非只读，本事实面供非只读之后的目标细分（如 /dev/* 且非 null/zero → 升级处置）；issue 的方案二（上游直接判设备文件）按 issue 意见「前者更好」取方案一，判定策略留给集成方
 回归：TestDecisionRedirsFacts——> /dev/sda 目标事实、2>>/fd、读侧标记、heredoc 定界符、动态目标、&>、子 shell/管道后半/命令替换内可见、超长尾窗收集、集成方设备文件检查示例免二次解析。
 
+- 杂务(deps)：依赖地板追到最新——github.com/oagentkit/guardx v0.24.0
+
+| 依赖 | 现地板 | 抬到 |
+|---|---|---|
+| `github.com/oagentkit/guardx` | `v0.23.4` | `v0.24.0` |
+| `github.com/oagentkit/textx` | `v0.10.5` | `v0.10.6` |
+## 为什么
+矩阵的**发版时刻地板时效**门禁（`verify_tag_floor --ref HEAD`）要求：各仓 HEAD
+（= 下次发版会发出去的内容）的依赖地板，相对那一刻的依赖最新版本，不能已落后。
+oekit 基座与矩阵模块都在高频发版 ⇒ 地板是**跑步机**，落后一格就会判红。
+## 兼容性实测
+本工具在提交前跑完 `go build` / `go vet` / `go test -race -count=1 ./...`（全绿才提交）
+与 `go mod tidy -diff`（无漂移）⇒ 改动**只影响依赖版本**，零行为差异。
+只改 `go.mod` / `go.sum` ⇒ 不需要 CHANGELOG 条目（版本段由下次发版的 `prewrite` 生成）。
+Co-authored-by: Murphy-Yi <zhangyi@Murphy-YideMac-Mini.local>
+
 - 杂务(deps)：依赖地板追到最新——github.com/oekit/pkg v0.40.0
 
 | 依赖 | 现地板 | 抬到 |
