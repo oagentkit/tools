@@ -182,7 +182,7 @@ func (t *Table) destructiveVerdict(name string, argv []string) (bool, string) {
 }
 
 // expandEnvSplitString 把 env 的 -S/--split-string 值原位展开成词序列
-//（tools#101）：-S 的值本身就是一条命令行（env 自行拆词执行），不拆开的话
+// （tools#101）：-S 的值本身就是一条命令行（env 自行拆词执行），不拆开的话
 // 剥壳永远卡在旗上、内核不可见。只在不可逆面展开——只读面未登记 -S，仍按
 // 未知 flag 拒（保守侧不变）。env 对 -S 串还有引号/转义处理（\n、${} 等），
 // 这里按空白朴素拆词是保守近似：拆不出的形态只可能漏判，不会把没跑的当跑了。

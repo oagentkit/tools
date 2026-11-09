@@ -98,7 +98,7 @@ func (s *codexStream) handleLine(line string) {
 
 // finalize 收尾装配：output-last-message 优先（官方保证的最终消息，在场即权威）、
 // 事件流 lastText 兜底；错误如实上抛。文件缺席时 lastText 先过正文行对账守门
-//（tools#83/#94/#105）再兜底。
+// （tools#83/#94/#105）再兜底。
 func (s *codexStream) finalize(stdout, stderr string, code int, err error) (*RunResult, error) {
 	if err != nil {
 		// 与 claude 族一致：output-last-message 已有最终消息（agent 正常完成但

@@ -156,7 +156,7 @@ func mimoTerminalLine(line string) bool {
 }
 
 // finalize 收尾装配（三段式骨架）：step_finish 到达即终态——执行错时终态优先
-//（agent 正常完成但退出码非零），空文本终态不再以 stdout 事件流原文兜底；
+// （agent 正常完成但退出码非零），空文本终态不再以 stdout 事件流原文兜底；
 // 无终态时先过终态/截断守门再走宽容路径（tools#83/#94：stdout 里有 step_finish
 // 形状却没被识别 = 行被丢或协议漂移、流带截断留痕 = 终端行大概率已丢，都拒绝
 // 当回答；tools#105：text 非空同样守门——吐过部分文本的跑不得借宽容路径把
