@@ -11,6 +11,7 @@
 `websearch/`
 `workcopy/`
 `sast/`
+`bgjob/`      ← 远程后台作业 marker 协议原语（tools#106）
 `bashguard/`  ← 自 guardx 迁入（v0.10.0）：Shell 命令静态裁决，依赖 mvdan.cc/sh
 ```
 
