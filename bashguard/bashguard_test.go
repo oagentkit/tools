@@ -523,3 +523,78 @@ func TestDecisionRedirsFacts(t *testing.T) {
 		t.Fatal("集成方设备文件检查应命中 /dev/sda 写重定向")
 	}
 }
+
+// TestGitReflogSubcommandGate 回归（tools#102）：reflog 曾登记普通 ro 叶子、
+// 无子命令区分——`git reflog delete <ref>@{n}` 删引用日志条目（不可逆写）曾
+// 被判只读。改子命令表后：裸形态/show/exists 只读，delete/expire 等写子命令
+// 不在子表即拒。
+func TestGitReflogSubcommandGate(t *testing.T) {
+	for _, cmd := range []string{
+		"git reflog",               // 裸 = show（只读，对照）
+		"git reflog --all -n 5",    // 纯 flag 形态
+		"git reflog --date=iso",    // 内联值 flag（既有回归形态）
+		"git reflog show",          // 只读子命令
+		"git reflog show HEAD@{1}", // 带引用操作数
+		"git reflog exists HEAD",   // 只读子命令（存在性检查）
+	} {
+		if d := Analyze(cmd, nil); !d.ReadOnly {
+			t.Errorf("%q 应判只读: %s", cmd, d.Reason)
+		}
+	}
+	for _, cmd := range []string{
+		"git reflog delete refs/heads/main@{1}", // 删条目 = 写
+		"git reflog expire --expire=now --all",  // 过期清理 = 写
+	} {
+		if d := Analyze(cmd, nil); d.ReadOnly {
+			t.Errorf("%q 是写形态，不得判只读", cmd)
+		}
+	}
+}
+
+// TestFsckLostFoundIsWrite 回归（tools#102）：`git fsck --lost-found` 把悬空
+// 对象写进 .git/lost-found/（实测落盘）——--lost-found 曾在 SafeFlags 里被判
+// 只读。移出后未知即拒，其余诊断 flag 保持只读。
+func TestFsckLostFoundIsWrite(t *testing.T) {
+	for _, cmd := range []string{
+		"git fsck",        // 对照
+		"git fsck --full", // 对照
+		"git fsck --dangling --connectivity-only",
+	} {
+		if d := Analyze(cmd, nil); !d.ReadOnly {
+			t.Errorf("%q 应判只读: %s", cmd, d.Reason)
+		}
+	}
+	if d := Analyze("git fsck --lost-found", nil); d.ReadOnly {
+		t.Error("git fsck --lost-found 会写 .git/lost-found/，不得判只读")
+	}
+}
+
+// TestGitListPatternOperandsReadOnly 回归（tools#104）：branch/tag 的 -l/--list
+// 已是安全旗，但**列表模式参数**（最常用的只读列举形态）以裸操作数出现，被
+// NoBareOperands 一律当「打标/建分支」拒——`git branch --list` 裸跑能过、带
+// 模式反而拒。-l/--list 登记 FlagOptional 吃掉紧随的模式参数后，列举形态放行、
+// 创建/打标形态照拒。
+func TestGitListPatternOperandsReadOnly(t *testing.T) {
+	for _, cmd := range []string{
+		"git branch --list",     // 对照：裸 --list 本就只读
+		"git branch --list v1*", // 模式参数（issue 复现形态）
+		"git tag --list",        // 对照
+		"git tag -l v1*",        // 模式参数（issue 复现形态）
+	} {
+		if d := Analyze(cmd, nil); !d.ReadOnly {
+			t.Errorf("%q 是只读列举形态: %s", cmd, d.Reason)
+		}
+	}
+	// 反证：创建/打标形态照拒（NoBareOperands 不得被豁免旁路）；--list 只吃
+	// 紧随的一个模式参数，多模式/隔旗形态保守仍拒（与既有方向一致）
+	for _, cmd := range []string{
+		"git branch feature-x",
+		"git tag v1.0.0",
+		"git tag -l 'v1*' 'v2*'",
+		"git branch --list -a v1*",
+	} {
+		if d := Analyze(cmd, nil); d.ReadOnly {
+			t.Errorf("%q 是写形态，不得判只读", cmd)
+		}
+	}
+}

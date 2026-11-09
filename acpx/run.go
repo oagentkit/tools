@@ -110,6 +110,35 @@ func lostTerminalErr(who, stdout string, hasTerm bool, isTerminalLine func(strin
 	return nil
 }
 
+// contentLineErr 正文行对账守门（tools#105）：codex/kimi 的正文来源行不是协议
+// 终态（是数据行，每条都进 lastText）——「OnLine 识别的条数」与「stdout 里现存
+// 的同形状条数」对不上 ⇒ 有行被 lineWriter 整行丢弃（>1MB，tools#83 机制），
+// 手里的最后一条可能是陈旧断片；截断留痕在场（tools#94）时流尾被剪、对账本身
+// 不可证。两条都 fail-closed：拒绝把部分文本当最终回答成功返回——吐过部分文本
+// 的跑曾借「text 非空即返回」绕过终态/截断守门（#105 残留面，#83 只在空文本时
+// 接管）。seen 须与 isContentLine 同判据计数（OnLine 实际识别的条数）。
+func contentLineErr(who, stdout string, seen int, isContentLine func(string) bool) error {
+	if stdoutTruncated(stdout) {
+		return fmt.Errorf("acpx: %s stdout 触发截断上限——正文行可能已随截断丢失，拒绝把部分文本当最终回答兜底（tools#94/#105）", who)
+	}
+	n := 0
+	for len(stdout) > 0 {
+		line := stdout
+		if i := strings.IndexByte(stdout, '\n'); i >= 0 {
+			line, stdout = stdout[:i], stdout[i+1:]
+		} else {
+			stdout = ""
+		}
+		if isContentLine(line) {
+			n++
+		}
+	}
+	if n > seen {
+		return fmt.Errorf("acpx: %s 事件流含 %d 条正文形状的行、仅识别 %d 条（单行超 1MB 上限被整行丢弃）——宁误报不静默，拒绝把陈旧断片当最终回答兜底（tools#105）", who, n, seen)
+	}
+	return nil
+}
+
 // parseJSONOut 容错解析 agent 的 JSON 输出：平衡括号感知地截取首个 JSON 对象
 // （日志混入/尾随噪音均可容忍）后 Unmarshal。失败时调用方走 fallbackResult。
 func parseJSONOut(stdout string, out any) error {

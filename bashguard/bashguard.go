@@ -543,7 +543,10 @@ func stripWrapper(argv []string, pol Policy) []string {
 		}
 		break
 	}
-	for i := 0; i < pol.ConsumeBare && len(rest) > 0; i++ {
+	// ConsumeBare 只吃**裸**操作数（timeout 的时长）：前置剥壳撞上未登记 flag
+	// break 出来时，旗 token 不能当裸操作数吞掉——否则它顶替了真正的时长位置，
+	// rest[0] 变成时长/内核错位，内核定位整体失真（tools#101）
+	for i := 0; i < pol.ConsumeBare && len(rest) > 0 && !strings.HasPrefix(rest[0], "-"); i++ {
 		rest = rest[1:]
 	}
 	return rest

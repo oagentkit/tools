@@ -416,3 +416,33 @@ func TestClaimStaleDetachesEntry(t *testing.T) {
 		t.Fatal("摘牌后条目不应再被重复领用")
 	}
 }
+
+// TestNewPoolNilLogger 回归（tools#103）：NewPool(root, nil) 是合法调用形态，
+// logger 是可选形象——nil 曾让 clone 成功后的首条日志即 nil 指针解引用
+// （panic 发生在建仓成功之后：目录已建、条目未登记），Sweep 的日志路径同病。
+// 修后 nil 走 logx.Nop 静默兜底（与 sast.Scan 的 tools#61 修法同一约定）。
+func TestNewPoolNilLogger(t *testing.T) {
+	fixture := makeFixtureRepo(t)
+	p := NewPool(t.TempDir(), nil)
+	p.CredentialOf = func(string) (string, string, bool) { return "file://" + fixture, "x", true }
+
+	ctx := context.Background()
+	key := WorktreeKey{Platform: "gitea", Owner: "o", Repo: "r", Number: "1",
+		HeadSHA: "HEAD", DefaultBranch: "main"}
+
+	dir, err := p.Ensure(ctx, key)
+	if err != nil {
+		t.Fatalf("nil logger 不得让建仓 panic/失败: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "README.md")); err != nil {
+		t.Fatalf("工作副本不完整: %v", err)
+	}
+	// refresh 与 Sweep 的日志路径同样走 Nop 兜底
+	key2 := key
+	key2.HeadSHA = "HEAD~0"
+	p.Release(key)
+	if _, err := p.Ensure(ctx, key2); err != nil {
+		t.Fatalf("nil logger 下增量刷新不得失败: %v", err)
+	}
+	p.Sweep(0) // 引用归零 + TTL 0 → 条目与孤儿目录回收路径的日志不 panic
+}
