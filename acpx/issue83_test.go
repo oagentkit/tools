@@ -38,7 +38,8 @@ func TestClaudeOversizedTerminalLineGuarded(t *testing.T) {
 }
 
 // TestKimiOversizedAssistantLineGuarded kimi 无协议终态、assistant 消息行即
-// 正文来源：1.2MB 的 assistant 行被丢后同样不得全文兜底。
+// 正文来源：1.2MB 的 assistant 行被丢后同样不得全文兜底。（tools#105 起 kimi
+// 守门改走 contentLineErr 对账——报错措辞是「正文形状的行」而非「终态」。）
 func TestKimiOversizedAssistantLineGuarded(t *testing.T) {
 	script := bigLine(`{"role":"assistant","content":"`, `"}`+"\n")
 	bin := fakeCLI(t, script)
@@ -46,8 +47,8 @@ func TestKimiOversizedAssistantLineGuarded(t *testing.T) {
 	k.Bin = bin
 
 	res, err := k.Run(context.Background(), RunRequest{Prompt: "x"})
-	if err == nil || !strings.Contains(err.Error(), "终态") {
-		t.Fatalf("超长 assistant 行被丢后不得把事件流原文当回答（tools#83）: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "拒绝把") {
+		t.Fatalf("超长 assistant 行被丢后不得把事件流原文当回答（tools#83/#105）: %v", err)
 	}
 	if res != nil {
 		t.Fatalf("守门报错路径不得同时返回结果: %+v", res)

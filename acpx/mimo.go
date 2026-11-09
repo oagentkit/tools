@@ -156,10 +156,11 @@ func mimoTerminalLine(line string) bool {
 }
 
 // finalize 收尾装配（三段式骨架）：step_finish 到达即终态——执行错时终态优先
-// （agent 正常完成但退出码非零），空文本终态不再以 stdout 事件流原文兜底；
-// 无终态时保留 text 事件文本（版本差异下 step_finish 缺失的宽容路径），text
-// 为空走全文兜底前先过终态丢失守门（tools#83：stdout 里有 step_finish 形状
-// 却没被识别 = 行被丢或协议漂移，拒绝把事件流原文当回答）。
+//（agent 正常完成但退出码非零），空文本终态不再以 stdout 事件流原文兜底；
+// 无终态时先过终态/截断守门再走宽容路径（tools#83/#94：stdout 里有 step_finish
+// 形状却没被识别 = 行被丢或协议漂移、流带截断留痕 = 终端行大概率已丢，都拒绝
+// 当回答；tools#105：text 非空同样守门——吐过部分文本的跑不得借宽容路径把
+// 陈旧断片当最终回答成功返回）。
 func (s *mimoStream) finalize(stdout, stderr string, code int, err error) (*RunResult, error) {
 	// 有错如实报错：不因恰好收到部分文本而把失败跑当成功返回
 	//（2026-09 huginn 实弹教训：纯错误跑曾以 stdout 全文兜底成"成功"，
@@ -176,10 +177,14 @@ func (s *mimoStream) finalize(stdout, stderr string, code int, err error) (*RunR
 		return nil, streamErr
 	}
 	text := s.text
+	// 终态/截断守门（tools#83/#94/#105）：text 非空同样要过——吐过部分文本后
+	// step_finish 行被丢（>1MB）或流被截断时，增量片段是陈旧断片，静默当成功
+	// 返回正是 #105 残留面。守门通过（stdout 无终态形状、无截断留痕）时保留
+	// 无终态宽容路径（版本差异下 step_finish 缺失的跑）。
+	if lost := lostTerminalErr("mimo", stdout, false, mimoTerminalLine); lost != nil {
+		return nil, lost
+	}
 	if text == "" {
-		if lost := lostTerminalErr("mimo", stdout, false, mimoTerminalLine); lost != nil {
-			return nil, lost
-		}
 		text = strings.TrimSpace(stdout) // 事件流不可用时全文兜底（含 ANSI 码的场景由调用方清理）
 	}
 	return &RunResult{Text: text, SessionID: s.sessionID, Usage: s.usage, ExitCode: code, Raw: []byte(stdout), Stderr: stderrTail(stderr)}, nil

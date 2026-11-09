@@ -60,6 +60,7 @@ type codexStream struct {
 	lastText string
 	usage    Usage
 	errMsg   string
+	msgSeen  int // 识别到的 assistant_message 行数（tools#105 对账基准，与 codexTerminalLine 同判据）
 }
 
 // handleLine 单行 JSONL 事件解析（非事件行忽略）。
@@ -77,9 +78,14 @@ func (s *codexStream) handleLine(line string) {
 			emitError(s.req, ev.Message, line)
 		}
 	case "item.completed":
-		if ev.Item != nil && ev.Item.ItemType == "assistant_message" && ev.Item.Text != "" {
-			s.lastText = ev.Item.Text
-			emitText(s.req, ev.Item.Text, line)
+		if ev.Item != nil && ev.Item.ItemType == "assistant_message" {
+			// 计数与 codexTerminalLine 严格同判据（空 text 的消息行也计入），
+			// 条数对账才严丝合缝（tools#105）
+			s.msgSeen++
+			if ev.Item.Text != "" {
+				s.lastText = ev.Item.Text
+				emitText(s.req, ev.Item.Text, line)
+			}
 		}
 	case "turn.completed":
 		// 多轮任务逐轮累加（与 mimo 适配器一致，只取最后一轮会少计）
@@ -90,7 +96,9 @@ func (s *codexStream) handleLine(line string) {
 	}
 }
 
-// finalize 收尾装配：output-last-message 优先、事件流 lastText 兜底；错误如实上抛。
+// finalize 收尾装配：output-last-message 优先（官方保证的最终消息，在场即权威）、
+// 事件流 lastText 兜底；错误如实上抛。文件缺席时 lastText 先过正文行对账守门
+//（tools#83/#94/#105）再兜底。
 func (s *codexStream) finalize(stdout, stderr string, code int, err error) (*RunResult, error) {
 	if err != nil {
 		// 与 claude 族一致：output-last-message 已有最终消息（agent 正常完成但
@@ -108,16 +116,16 @@ func (s *codexStream) finalize(stdout, stderr string, code int, err error) (*Run
 	}
 	text := readFileTrim(s.lastMsg)
 	if text == "" {
-		text = s.lastText
-	}
-	// 终态丢失守门（tools#83）：output-last-message 文件与事件流 lastText
-	// 双双为空、stdout 里却存在 assistant_message 形状的事件行——该行单行
-	// 超 1MB 被 lineWriter 丢弃（agent 产出大文件/长 diff 的最终消息即可
-	// 触发）或协议漂移。宁误报不静默：报错而非把空文本/事件流断片当成功。
-	if text == "" {
-		if lost := lostTerminalErr("codex", stdout, false, codexTerminalLine); lost != nil {
+		// 终态/截断守门（tools#83/#94/#105）：官方 last-message 文件缺席时，
+		// lastText 无论是否非空都要过守门——吐过部分文本的跑曾借「text 非空
+		// 即返回」绕过守门（#105 残留面）。对账（assistant_message 行数 vs
+		// 识别数）对不上 = 有行被丢，手里的 lastText 是陈旧断片；截断留痕在场
+		// = 流尾被剪、对账不可证。都 fail-closed；对齐且无截断时保留 lastText
+		// 宽容路径（旧版本/写文件失败的场景）。
+		if lost := contentLineErr("codex", stdout, s.msgSeen, codexTerminalLine); lost != nil {
 			return nil, lost
 		}
+		text = s.lastText
 	}
 	return &RunResult{Text: text, Usage: s.usage, ExitCode: code, Raw: []byte(stdout), Stderr: stderrTail(stderr)}, nil
 }

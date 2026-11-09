@@ -43,12 +43,14 @@ func (k *Kimi) Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 	}
 
 	var lastAssistant string
+	seen := 0
 	onLine := func(line string) {
 		var msg kimiMessage
 		if err := json.Unmarshal([]byte(line), &msg); err != nil {
 			return // 非消息行（日志/警告）忽略
 		}
 		if msg.Role == "assistant" && msg.Content != "" {
+			seen++ // 与 kimiTerminalLine 同判据计数（tools#105 对账基准）
 			lastAssistant = msg.Content
 			emitText(req, msg.Content, line)
 		}
@@ -72,15 +74,17 @@ func (k *Kimi) Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 	if err != nil && lastAssistant == "" {
 		return nil, err
 	}
+	// 正文行对账守门（tools#83/#94/#105）：kimi 无协议终态事件，assistant 消息
+	// 行就是唯一的正文来源。lastAssistant 非空同样要过守门——吐过部分文本的跑
+	// 曾借「text 非空即返回」绕过守门（#105 残留面）：stdout 里正文形状行数与
+	// 识别数对不上（单行超 1MB 被整行丢弃是主形态：agent 任务产出大文件/长
+	// diff 的最终消息即可触发）或截断留痕在场（流尾被剪、对账不可证）时，
+	// 手里的 lastAssistant 是陈旧断片，拒绝当最终回答成功返回。对齐且无截断
+	// 时保留原有宽容路径。
+	if lost := contentLineErr("kimi", stdout, seen, kimiTerminalLine); lost != nil {
+		return nil, lost
+	}
 	if lastAssistant == "" {
-		// 终态丢失守门（tools#83）：kimi 无协议终态事件，assistant 消息行
-		// 就是唯一的正文来源——stdout 里**存在** assistant 消息形状的行却没
-		// 进 lastAssistant（单行超 1MB 被丢弃是主形态：agent 任务产出大文件/
-		// 长 diff 的最终消息即可触发；解析漂移亦然），说明 OnLine 流丢了行，
-		// 拒绝把整条 JSONL 事件流原文当最终回答兜底
-		if lost := lostTerminalErr("kimi", stdout, false, kimiTerminalLine); lost != nil {
-			return nil, lost
-		}
 		// stream-json 不可用（旧版本/文本模式）：全文兜底
 		lastAssistant = strings.TrimSpace(stdout)
 	}
