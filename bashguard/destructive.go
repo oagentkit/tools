@@ -114,17 +114,42 @@ func (t *Table) destructiveKernel(inv Invocation) (bool, string) {
 	if _, ok := t.destructiveRule(inv.Name); ok {
 		return false, "" // 自身命中不可逆表：destructiveVerdict 已按自身规则判过
 	}
-	for i, tok := range inv.Args {
+	if ok, why := t.kernelScan(inv.Args); ok {
+		return true, fmt.Sprintf("%s 的内核 %s", inv.Name, why)
+	}
+	return false, ""
+}
+
+// kernelScan 内核兜底的全 token 扫描（tools#100/#101 单源）。
+//
+// 内核定位失败的两类形态都不能在首个对不上规则的 token 处放行——那会让真正
+// 的内核 rm 再也轮不到判定：
+//   - 调度器带值旗未登记（tools#100）：sudo -u nobody 的 nobody 是 -u 的值，
+//     曾被当成内核候选，查不到规则即整体放行；
+//   - 剥壳撞上未登记前置旗（tools#101）：env -S/-/--、timeout --kill-after
+//     把 stripWrapper 卡在旗上，rest[0] 不是内核。
+//
+// 于是扫全部非 flag token，对每个命中不可逆规则的 token 逐一按内核判定（其后
+// 的参数归它）；token 是已注册包装时递归整段判定（sudo env -S 'rm -rf /' 的
+// -S 值拆词只有 env 自己的剥壳路径认识）。
+//
+// 保守取舍：值归属不明（哪个旗吃哪个参数无表可查），「后续位置上恰好出现
+// 不可逆命令名」也当内核候选——sudo ls rm -rf /data 的 rm 明明是 ls 的操作数
+// 也会多报。多报的代价只是多要一次确认，漏报的代价是命令真跑了；且这类形态
+// 本就被只读门拒（sudo/env -S 都不在只读表），影响的只是风险档位。
+func (t *Table) kernelScan(argv []string) (bool, string) {
+	for i, tok := range argv {
 		if tok == "" || strings.HasPrefix(tok, "-") {
-			continue // 调度器自身的前置 flag（sudo -n/-E 形态）
+			continue // 调度器/包装的前置 flag（值归属不明，不猜）
 		}
 		if _, ok := t.destructiveRule(tok); !ok {
-			return false, "" // 首个非 flag 参数不是不可逆表内的内核：无内核可判（sudo ls 形态）
+			if pol, isCmd := t.Commands[tok]; !isCmd || !pol.Wrapper {
+				continue // 既非不可逆内核、也非包装：纯数据/普通命令
+			}
 		}
-		if ok, why := t.destructiveVerdict(tok, inv.Args[i+1:]); ok {
-			return true, fmt.Sprintf("%s 的内核 %s", inv.Name, why)
+		if ok, why := t.destructiveVerdict(tok, argv[i+1:]); ok {
+			return true, why
 		}
-		return false, "" // 单内核派发：内核判过即止，其后的参数是内核的数据
 	}
 	return false, ""
 }
@@ -135,9 +160,17 @@ func (t *Table) destructiveVerdict(name string, argv []string) (bool, string) {
 	//（env rm -rf / 的不可逆性在 rm 上，不在 env 上）。
 	// 剥壳参数表取只读表——那里才有包装自身的 flag 声明。
 	if pol, ok := t.Commands[name]; ok && pol.Wrapper {
+		if name == "env" {
+			argv = expandEnvSplitString(argv)
+		}
 		rest := stripWrapper(argv, pol)
 		if len(rest) == 0 {
 			return false, ""
+		}
+		if strings.HasPrefix(rest[0], "-") {
+			// 剥壳撞上未登记前置旗（tools#101）：内核定位不了——退化全 token
+			// 扫描兜底（rest[0] 非 flag 时它就是内核，走精确递归不进兜底）
+			return t.kernelScan(rest)
 		}
 		return t.destructiveVerdict(rest[0], rest[1:])
 	}
@@ -146,6 +179,34 @@ func (t *Table) destructiveVerdict(name string, argv []string) (bool, string) {
 		return false, ""
 	}
 	return destructiveByRule(name, argv, rule)
+}
+
+// expandEnvSplitString 把 env 的 -S/--split-string 值原位展开成词序列
+//（tools#101）：-S 的值本身就是一条命令行（env 自行拆词执行），不拆开的话
+// 剥壳永远卡在旗上、内核不可见。只在不可逆面展开——只读面未登记 -S，仍按
+// 未知 flag 拒（保守侧不变）。env 对 -S 串还有引号/转义处理（\n、${} 等），
+// 这里按空白朴素拆词是保守近似：拆不出的形态只可能漏判，不会把没跑的当跑了。
+func expandEnvSplitString(argv []string) []string {
+	for i, a := range argv {
+		var val string
+		switch {
+		case a == "-S" && i+1 < len(argv):
+			val = argv[i+1]
+		case strings.HasPrefix(a, "--split-string="):
+			val = strings.TrimPrefix(a, "--split-string=")
+		default:
+			continue
+		}
+		out := append([]string{}, argv[:i]...)
+		out = append(out, strings.Fields(val)...)
+		if a == "-S" {
+			out = append(out, argv[i+2:]...)
+		} else {
+			out = append(out, argv[i+1:]...)
+		}
+		return out
+	}
+	return argv
 }
 
 // destructiveRule 查不可逆规则：先精确命中，再前缀族（"mkfs*" 覆盖 mkfs.ext4 等）。

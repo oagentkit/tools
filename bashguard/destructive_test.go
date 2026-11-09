@@ -295,3 +295,65 @@ func TestDestructiveThroughUnregisteredDispatcher(t *testing.T) {
 		t.Errorf("sudo ls 无不可逆内核，不应误报: %+v", d)
 	}
 }
+
+// TestDestructiveThroughSchedulerValueFlags 回归（tools#100）：sudo -u/-g、
+// doas -u 这类**带值**前置旗——旗的值（nobody/docker/root）曾被称为内核候选，
+// 查不到规则即整体放行，真正的内核 rm 再也轮不到判定；同族命令只差一个
+// `-u <user>` 就从 destructive（要确认）掉到 write（可直跑）。
+func TestDestructiveThroughSchedulerValueFlags(t *testing.T) {
+	for _, cmd := range []string{
+		"sudo -u nobody rm -rf /", // 对照：sudo rm -rf / 本就判出
+		"sudo -u nobody mkfs.ext4 /dev/sdb1",
+		"sudo -g docker dd if=x of=/dev/sda",
+		"doas -u root mkfs.ext4 /dev/sdb1",
+	} {
+		if d := Analyze(cmd, nil); !d.Destructive {
+			t.Errorf("%q 应判不可逆（旗值不得顶替内核）: %+v", cmd, d)
+		}
+	}
+	// 反证：旗值形态 + 无不可逆内核照旧不误报
+	for _, cmd := range []string{
+		"sudo -u nobody ls -la",
+		"sudo -g docker ps -a",
+	} {
+		if d := Analyze(cmd, nil); d.Destructive {
+			t.Errorf("%q 无不可逆内核，不应误报: %+v", cmd, d)
+		}
+	}
+}
+
+// TestDestructiveThroughWrapperUnregisteredFlags 回归（tools#101）：注册过的
+// 包装（env/timeout）遇到表外前置 token（GNU env -S、POSIX env -/env --、
+// timeout --kill-after）时剥壳提前 break，rest[0] 变成 -S/--/10，判不出内核；
+// 而 destructiveKernel 又因包装已注册而不兜底 → 不可逆漏判。
+func TestDestructiveThroughWrapperUnregisteredFlags(t *testing.T) {
+	for _, cmd := range []string{
+		"env rm -rf /",        // 对照：注册形态本就判出
+		"timeout 10 rm -rf /", // 对照：ConsumeBare 吃时长本就判出
+		"env -S 'rm -rf /'",   // GNU env -S：值本身就是命令行
+		"env - rm -rf /",      // POSIX env -：忽略环境
+		"env -- rm -rf /",     // POSIX env --：选项终止
+		"env -S 'rm -rf' /",   // -S 值与后续参数拼接
+		"timeout --kill-after=5 10 rm -rf /",
+		"timeout -k5 10 rm -rf /", // -k5 联合内联形态
+	} {
+		if d := Analyze(cmd, nil); !d.Destructive {
+			t.Errorf("%q 应判不可逆（表外前置旗不得吞内核）: %+v", cmd, d)
+		}
+	}
+	// 反证：表外前置旗 + 无不可逆内核照旧不误报
+	for _, cmd := range []string{
+		"env -S 'ls -la'",
+		"env - ls -la",
+		"timeout --kill-after=5 10 ls -la",
+	} {
+		if d := Analyze(cmd, nil); d.Destructive {
+			t.Errorf("%q 无不可逆内核，不应误报: %+v", cmd, d)
+		}
+	}
+	// 内核可判时走精确递归，不进兜底：内核后的参数是内核的数据
+	//（env ls rm -rf / 的 rm 是 ls 的操作数不是内核，不误报）
+	if d := Analyze("env ls rm -rf /", nil); d.Destructive {
+		t.Errorf("内核可判时后续参数是数据，不应误报: %+v", d)
+	}
+}
