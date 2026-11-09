@@ -130,6 +130,11 @@ func (s *claudeStream) onResult(ev *claudeEvent, line string) {
 	// 非 0 退出已有「result 优先」策略（finalizeStream 终态优先段），不受影响。
 	if ev.IsError {
 		s.errMsg = ev.Result
+		if s.errMsg == "" {
+			// 空串回退通用文案（tools#94）：CLI 只报 is_error 不带 result 文本时，
+			// streamError 空串=无失败的口径会让 OnEvent=nil 消费方零信号
+			s.errMsg = "claude 结果事件 is_error=true 但未携带 result 文本"
+		}
 	}
 	typ := EventResult
 	if ev.IsError {

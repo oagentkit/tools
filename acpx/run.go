@@ -62,6 +62,14 @@ func fallbackResult(stdout, stderr string, code int) *RunResult {
 	return &RunResult{Text: strings.TrimSpace(stdout), ExitCode: code, Raw: []byte(stdout), Stderr: stderrTail(stderr)}
 }
 
+// stdoutTruncated 判定 stdout 是否带 procx 截断留痕（tools#94）：noteTruncated
+// 在 captured stdout 尾部追加「\n…（stdout 超过 N 字节上限，已截断）」。双条件
+// 从紧判定（截断短语 + 尾缀），代理 CLI 自身输出出现完整标记形态的概率远低
+// 于误报面。
+func stdoutTruncated(stdout string) bool {
+	return strings.Contains(stdout, "（stdout 超过") && strings.HasSuffix(strings.TrimRight(stdout, " \t\r\n"), "已截断）")
+}
+
 // lostTerminalErr 终态丢失守门（tools#83）：stdout 里**存在**协议终态事件
 // 形状的行、却没被 OnLine 流识别成终态（hasTerm=false）时如实报错，拒绝把
 // 整条事件流原文当「最终回答」成功返回。
@@ -80,6 +88,13 @@ func fallbackResult(stdout, stderr string, code int) *RunResult {
 func lostTerminalErr(who, stdout string, hasTerm bool, isTerminalLine func(string) bool) error {
 	if hasTerm || isTerminalLine == nil {
 		return nil
+	}
+	// 截断守门（tools#94）：procx cappedBuffer 只保 stdout 前 8MB，超出部分
+	// 连同终端行一起被静默丢弃——「无终态 + 尾部截断留痕」= 终端行大概率已
+	// 随截断被丢，在残缺 stdout 里找不到终态形状是必然而非异常。fail-closed：
+	// 拒绝把残缺事件流当成功回答兜底。
+	if stdoutTruncated(stdout) {
+		return fmt.Errorf("acpx: %s stdout 触发截断上限且未见协议终态——终端行大概率已随截断被丢弃，拒绝把残缺事件流当最终回答兜底（tools#94）", who)
 	}
 	for len(stdout) > 0 {
 		line := stdout
