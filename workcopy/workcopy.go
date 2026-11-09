@@ -56,8 +56,13 @@ type wcEntry struct {
 	lastUsed time.Time
 }
 
-// NewPool 创建工作副本沙箱池。
+// NewPool 创建工作副本沙箱池。log 为 nil 时走 logx.Nop 静默兜底（tools#103，
+// 与 sast.Scan 的 tools#61 修法同一 nil-safe 约定）：logger 是可选形象，传 nil
+// 不得 panic——曾建仓成功后的首条日志即 nil 指针解引用（目录已建、条目未登记）。
 func NewPool(root string, log logx.Logger) *Pool {
+	if log == nil {
+		log = logx.Nop()
+	}
 	return &Pool{Root: root, Log: log, entries: map[string]*wcEntry{}}
 }
 

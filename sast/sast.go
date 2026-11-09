@@ -80,9 +80,9 @@ const maxFindingsPerTool = 50
 // deepen 到 merge-base），为空退化为全仓 --no-git 扫描。paths 为本次审查实际
 // 覆盖的变更文件清单（diff 聚焦——全仓扫描在大仓上既慢又淹没信噪比；nil/空 =
 // 全仓）。未配置 config 的 semgrep 不产结果（不算覆盖缺口，只告警）。
-// log nil 安全（tools#61，仓内 nil-safe logger 约定同 Pool.logger()）：
-// nil 走 logx.Nop 静默兜底——Config「全空 = 功能关闭」导向最小装配，
-// 可选形象的 logger 传 nil 不得 panic。
+// log nil 安全（tools#61；nil-safe logger 约定：可选形象的 logger 传 nil 走
+// logx.Nop 静默兜底，workcopy.NewPool 同款，tools#103 修正了此前指向不存在的
+// Pool.logger() 的注释）——Config「全空 = 功能关闭」导向最小装配，传 nil 不得 panic。
 func Scan(ctx context.Context, cfg Config, dir, baseRef string, paths []string, log Logger) []ToolResult {
 	if log == nil {
 		log = logx.Nop()
