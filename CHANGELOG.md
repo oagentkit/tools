@@ -9,6 +9,10 @@
 复合变体（终端行>1MB×流>8MB）此前只做形状扫描找不到形状就放行兜底。
 另修 claude is_error 空串静默成功：空串回退通用文案。
 
+- 杂务(deps)：依赖地板追到最新——github.com/oekit/pkg v0.41.0
+
+## [v0.14.0] — 2026-11-09
+
 ### 修复：tools 第三轮 issue 清零二波（#82 #83）
 
 * fix(acpx): claude is_error result 如实上抛并接入终态丢失守门（#82 #83）
@@ -39,7 +43,6 @@ sed 是含 I/O 原语的 mini-language（w/W 写文件、GNU e 与 s///e 执行 
 - 语义边界：写重定向（Read=false）本身已判非只读，本事实面供非只读之后的目标细分（如 /dev/* 且非 null/zero → 升级处置）；issue 的方案二（上游直接判设备文件）按 issue 意见「前者更好」取方案一，判定策略留给集成方
 回归：TestDecisionRedirsFacts——> /dev/sda 目标事实、2>>/fd、读侧标记、heredoc 定界符、动态目标、&>、子 shell/管道后半/命令替换内可见、超长尾窗收集、集成方设备文件检查示例免二次解析。
 
-- 杂务(deps)：依赖地板追到最新——github.com/oekit/pkg v0.41.0
 - 杂务(deps)：依赖地板追到最新——github.com/oagentkit/runtime v0.12.5
 
 | 依赖 | 现地板 | 抬到 |
