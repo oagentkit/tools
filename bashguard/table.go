@@ -140,15 +140,29 @@ func defaultCommands() map[string]Policy {
 		"ls-remote": ro(with(bools("--heads", "-h", "--tags", "-t", "--refs", "--quiet", "-q", "--exit-code", "--get-url", "--symref", "--sort"), "--sort", "optional", "-o", "string")),
 		"describe":  ro(with(bools("--all", "--tags", "--contains", "--abbrev", "--candidates", "--exact-match", "--debug", "--long", "--match", "--always", "--first-parent", "--exclude", "--dirty", "--broken"), "--match", "string", "--exclude", "string", "--abbrev", "optional", "--candidates", "optional")),
 		"shortlog":  ro(bools("-n", "-s", "-e", "-w", "--summary", "--email", "--numbered", "--committer", "--group")),
-		"reflog":    ro(with(bools("--all", "--date", "--relative-date", "--oneline", "--no-abbrev"), "--since", "string", "--until", "string", "-n", "string", "--date=", "string")),
+		// reflog：裸形态 = show（只读）；delete/expire 是写（tools#102：
+		// git reflog delete <ref>@{n} 删引用日志条目，不可逆写）——子命令表
+		// 之外一律拒。show 带与父层同款 flag（git reflog show 透传 log 选项），
+		// 操作数（<ref>@{n}）是只读形态放行
+		"reflog": Policy{ReadOnly: true,
+			SafeFlags: with(bools("--all", "--date", "--relative-date", "--oneline", "--no-abbrev"), "--since", "string", "--until", "string", "-n", "string", "--date=", "string"),
+			Subcommands: map[string]Policy{
+				"show":   ro(with(bools("--all", "--date", "--relative-date", "--oneline", "--no-abbrev"), "--since", "string", "--until", "string", "-n", "string", "--date=", "string")),
+				"exists": ro(bools()),
+			}},
 		"remote": Policy{ReadOnly: true,
 			SafeFlags: bools("-v", "--verbose"), // git remote -v = 列表（带 URL）
 			Subcommands: map[string]Policy{
 				"show":    ro(with(bools("-n"), "--prune", "bool", "--all", "bool")),
 				"get-url": ro(bools("--push", "--all")),
 			}}, // rename/set-url 等写形态不在子表则拒
-		"branch": roNoBare(with(bools("-a", "--all", "-v", "-vv", "--verbose", "--list", "-r", "--remotes", "--show-current", "--no-color", "--color", "-q", "--quiet"), "--contains", "string", "--merged", "string", "--no-merged", "string", "--sort", "string", "--points-at", "string")), // 裸=列表；git branch <名> 创建=写
-		"tag":    roNoBare(with(bools("-l", "--list"), "-n", "optional", "--sort", "optional", "--contains", "optional", "--points-at", "optional")),                                                                                                                                          // 裸=列表；git tag <名> 打标=写
+		// branch/tag：裸=列表，<名>=创建/打标（写）→ NoBareOperands；-l/--list
+		// 是列表开关，其后的**模式参数**以裸操作数出现却是只读列举形态
+		//（tools#104：git tag -l 'v1*' 曾被一刀拒）——登记 FlagOptional 吃掉
+		// 紧随的一个操作数（git 自身拒绝「列表 + 打标」混合形态，无写路径旁路；
+		// 多模式/隔旗形态保守仍拒，与既有方向一致）
+		"branch": roNoBare(with(bools("-a", "--all", "-v", "-vv", "--verbose", "-r", "--remotes", "--show-current", "--no-color", "--color", "-q", "--quiet"), "--list", "optional", "--contains", "string", "--merged", "string", "--no-merged", "string", "--sort", "string", "--points-at", "string")),
+		"tag":    roNoBare(with(bools(), "-l", "optional", "--list", "optional", "-n", "optional", "--sort", "optional", "--contains", "optional", "--points-at", "optional")), // 裸=列表；git tag <名> 打标=写
 		"stash": Policy{ReadOnly: true, NoBareOperands: true, Subcommands: map[string]Policy{ // 裸=push（写）；list/show 只读
 			"list": ro(bools()),
 			"show": ro(with(bools("-p", "--patch", "--stat", "--name-only", "--name-status", "-u"), "--format", "optional", "--pretty", "optional")),
@@ -158,7 +172,9 @@ func defaultCommands() map[string]Policy {
 		"worktree": Policy{ReadOnly: true, NoBareOperands: true, Subcommands: map[string]Policy{
 			"list": ro(with(bools("--porcelain", "-v", "--verbose", "-z"), "--expire", "string")),
 		}},
-		"fsck":          ro(bools("--full", "--no-full", "--strict", "--no-strict", "--unreachable", "--dangling", "--lost-found", "--connectivity-only", "--no-reflogs", "-v", "--verbose", "--progress", "--no-progress")),
+		// fsck：--lost-found 把悬空对象写进 .git/lost-found/（tools#102）——
+		// 移出 SafeFlags（未知即拒），其余诊断 flag 保持只读
+		"fsck":          ro(bools("--full", "--no-full", "--strict", "--no-strict", "--unreachable", "--dangling", "--connectivity-only", "--no-reflogs", "-v", "--verbose", "--progress", "--no-progress")),
 		"count-objects": ro(bools("-v", "--verbose", "-H", "--human-readable")),
 		"cat-file":      ro(with(bools("-t", "-s", "-e", "-p", "--batch", "--batch-check", "--batch-all-sha1s", "--buffer", "-z", "--follow-symlinks", "--textconv", "--filters"), "--path", "string", "--batch-command", "bool")),
 		"show-ref":      ro(bools("--head", "-d", "--dereference", "-s", "--hash", "--abbrev", "--tags", "--heads", "-q", "--verify", "--exclude-existing")),
