@@ -357,3 +357,84 @@ func TestDestructiveThroughWrapperUnregisteredFlags(t *testing.T) {
 		t.Errorf("内核可判时后续参数是数据，不应误报: %+v", d)
 	}
 }
+
+// TestDestructiveFindBatchDelete 回归（tools#107）：find 的批量删除形态
+// （-delete / -exec rm -rf）与同效果的 rm -rf 必须同档（destructive）——
+// 此前 find 登记在只读表、不在不可逆表，判定链两处对「已注册命令」早退，
+// -exec 段里的 rm -rf 整体漏出（Risk=write 免确认直接执行）。
+//
+// 负例同钉：-exec 段里是只读内核（grep）不得整段误报——保守多报的边界
+// 在「内核不可逆」，不在「带 -exec」。
+func TestDestructiveFindBatchDelete(t *testing.T) {
+	cases := []struct {
+		cmd         string
+		destructive bool
+	}{
+		// —— 漏报面（tools#107 主张）：批量删除形态 ——
+		{"find . -delete", true},
+		{"find / -name '*.log' -delete", true},
+		{"find . -exec rm -rf {} +", true},
+		{"find . -exec rm -rf {} \\;", true},
+		{"find . -exec rm -fr {} +", true},    // 联合短 flag 换拼写
+		{"find . -execdir rm -rf {} +", true}, // 换子目录为工作目录，破坏面更隐蔽
+		{"find . -ok rm -rf {} \\;", true},
+		{"find . -name '*.log' -exec rm -rf {} \\;", true},
+		// 包装不洗白内核：-exec 段经调度器再进 find
+		{"sudo find . -delete", true},
+		{"xargs find . -exec rm -rf {} +", true},
+		// —— 负例：-exec 段内核只读 / find 纯查找 ——
+		{"find . -name '*.log'", false},
+		{"find . -maxdepth 2 -type f", false},
+		{"find . -exec grep -r TODO {} \\;", false},
+		{"find . -exec rm {} \\;", false}, // rm 无递归 flag：同 rm 自身判据（单删可逆）
+	}
+	for _, c := range cases {
+		d := Analyze(c.cmd, nil)
+		if d.Destructive != c.destructive {
+			t.Errorf("%q：不可逆应为 %v，实得 %v（原因 %q）", c.cmd, c.destructive, d.Destructive, d.DestructiveReason)
+		}
+		if c.destructive {
+			if got := d.Risk(); got != RiskDestructive {
+				t.Errorf("%q：Risk 应为 destructive，实得 %s", c.cmd, got)
+			}
+		}
+	}
+}
+
+// TestDestructiveGitFamily 回归（tools#107 同表缺口）：git 家族的不可逆形态
+// ——历史改写/强推/强制清理。生态共识已有（下游 jumpserver-kit 自维护的
+// destructiveGit 同判），上游缺位。
+func TestDestructiveGitFamily(t *testing.T) {
+	cases := []struct {
+		cmd         string
+		destructive bool
+	}{
+		// —— 不可逆 ——
+		{"git reset --hard HEAD~1", true},
+		{"git reset --hard", true},
+		{"git clean -fdx", true},
+		{"git clean -fd", true},
+		{"git clean -f", true},
+		{"git clean --force", true},
+		{"git push --force origin main", true},
+		{"git push -f origin main", true},
+		{"git push --force-with-lease origin main", true},
+		{"git filter-branch -- --all", true},
+		// 全局前置旗不歪子命令定位（-C/-c 吃参后子命令照常落位）
+		{"git -C /repo push --force origin main", true},
+		{"git -c core.hooksPath=/dev/null reset --hard", true},
+		// —— 写但可逆 / 只读 ——
+		{"git status", false},
+		{"git log --oneline", false},
+		{"git reset --soft HEAD@{1}", false},
+		{"git clean -n", false}, // dry-run
+		{"git push origin main", false},
+		{"git branch -D feature", false}, // 分支可重建（reflog 捞回），不在此表
+	}
+	for _, c := range cases {
+		d := Analyze(c.cmd, nil)
+		if d.Destructive != c.destructive {
+			t.Errorf("%q：不可逆应为 %v，实得 %v（原因 %q）", c.cmd, c.destructive, d.Destructive, d.DestructiveReason)
+		}
+	}
+}

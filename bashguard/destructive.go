@@ -178,7 +178,51 @@ func (t *Table) destructiveVerdict(name string, argv []string) (bool, string) {
 	if !ok {
 		return false, ""
 	}
-	return destructiveByRule(name, argv, rule)
+	if hit, why := destructiveByRule(name, argv, rule); hit {
+		return true, why
+	}
+	// 自身判据未命中再看内嵌命令载荷（tools#107）：find -exec rm -rf 的不可逆
+	// 性在段内 rm 上，find 自身的判据（-delete）看不到它。
+	return t.execPayloadScan(name, argv, rule)
+}
+
+// execPayloadScan 内嵌命令载荷的不可逆判定（tools#107）。
+//
+// find 的 -exec/-execdir/-ok/-okdir 载荷是一段内核命令（; 或 + 收界）：
+// `find . -exec rm -rf {} +` 与 rm -rf 同效，但 find 登记在只读表里、不在
+// 不可逆判据上——判定链两处对「已注册命令」早退（destructiveVerdict 无规则
+// 即 false；destructiveKernel 把已注册命令的参数当数据），批量删除整体漏出
+// 不可逆档。规则登记 ExecFlags 后对每段载荷按内核再判，与顶层 destructiveScan
+// 的内核兜底同一条纪律：包装不得洗白内核。
+//
+// 段内判定走 kernelScan 全 token 扫描而非只看段首：段首命令（find 语法里
+// -exec 后紧跟命令名）之外，段中还可能出现调度器（-exec sudo rm -rf … 的
+// 内核 rm 不在段首）。保守取舍与 kernelScan 一致：段内数据 token 恰好命中
+// 不可逆命令名时多报，代价只是多一次确认，漏报的代价是命令真跑了。
+func (t *Table) execPayloadScan(name string, argv []string, rule Policy) (bool, string) {
+	for i, a := range argv {
+		isExec := false
+		for _, f := range rule.ExecFlags {
+			if a == f {
+				isExec = true
+				break
+			}
+		}
+		if !isExec {
+			continue
+		}
+		seg := argv[i+1:]
+		for j, tok := range seg {
+			if tok == ";" || tok == "+" { // find 载荷段界；缺界=残缺形态，取余段保守判定
+				seg = seg[:j]
+				break
+			}
+		}
+		if ok, why := t.kernelScan(seg); ok {
+			return true, fmt.Sprintf("%s 的 %s 段内内核不可逆：%s", name, a, why)
+		}
+	}
+	return false, ""
 }
 
 // expandEnvSplitString 把 env 的 -S/--split-string 值原位展开成词序列
