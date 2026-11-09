@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/oagentkit/guardx/logredact"
+	"github.com/oekit/concurrency/async"
 	"github.com/oekit/logx"
 )
 
@@ -445,4 +446,88 @@ func TestNewPoolNilLogger(t *testing.T) {
 		t.Fatalf("nil logger 下增量刷新不得失败: %v", err)
 	}
 	p.Sweep(0) // 引用归零 + TTL 0 → 条目与孤儿目录回收路径的日志不 panic
+}
+
+// TestEnsureRefreshSurvivesConcurrentSweep 回归（tools#108）：同 PR 换 head 的
+// 增量刷新窗口内，被领用的目录已从 entries 摘牌——Sweep 的孤儿扫描只按
+// entries 构建保护集合，把「在飞刷新」的目录当泄漏目录按 TTL 删掉，fetch
+// 半路报错、Ensure 回落整次全新浅克隆（大仓最贵一步，增量刷新收益归零；
+// 同一 PR 连续刷新反复踩——隔天再审时目录早已过 TTL 而刷新本身还在飞）。
+// 修后领用即入 Sweep 保护集合：刷新在飞时目录不得被删，刷新照常完成。
+func TestEnsureRefreshSurvivesConcurrentSweep(t *testing.T) {
+	fixture := makeFixtureRepo(t)
+	p := newTestPool(t, fixture)
+	p.CredentialOf = func(string) (string, string, bool) { return "file://" + fixture, "x", true }
+	ctx := context.Background()
+
+	v1 := WorktreeKey{Platform: "gitea", Owner: "o", Repo: "r", Number: "1",
+		HeadSHA: "v1", DefaultBranch: "main"}
+	dir, err := p.Ensure(ctx, v1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 把刷新的 fetch 拉长到可观测：沙箱克隆的 uploadpack 指到先睡后干的脚本，
+	// Sweep 与刷新的真并发窗口由此保证（Sweep 在 sleep 内到达）
+	slow := filepath.Join(t.TempDir(), "slow-upload-pack")
+	_ = os.WriteFile(slow, []byte("#!/bin/sh\nsleep 1\nexec git upload-pack \"$@\"\n"), 0o755)
+	gitRun(t, dir, "config", "remote.origin.uploadpack", slow)
+	p.Release(v1) // rc=0：保留目录可被 claimStale 领用
+
+	// 新推送：第二个提交 + PR ref 前移
+	_ = os.WriteFile(filepath.Join(fixture, "README.md"), []byte("# fixture v2\n"), 0o644)
+	gitRun(t, fixture, "add", ".")
+	gitRun(t, fixture, "commit", "-m", "v2")
+	gitRun(t, fixture, "update-ref", "refs/pull/1/head", "main")
+	newSHA := gitOut(t, fixture, "rev-parse", "main")
+	v2 := WorktreeKey{Platform: "gitea", Owner: "o", Repo: "r", Number: "1",
+		HeadSHA: newSHA, DefaultBranch: "main"}
+
+	type ensureRes struct {
+		dir string
+		err error
+	}
+	resCh := make(chan ensureRes, 1)
+	async.GoSafe(func() {
+		d, err := p.Ensure(ctx, v2)
+		resCh <- ensureRes{d, err}
+	})
+
+	// 等待领用发生（claimStale 摘牌后 entries 清空——此刻刷新的 fetch 在飞）
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		p.mu.Lock()
+		n := len(p.entries)
+		p.mu.Unlock()
+		if n == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("刷新未进入领用窗口（entries 未摘牌）")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	// 刷新在飞时 Sweep（TTL=0 = 一切都算过期）：在飞目录不得被当孤儿删掉
+	p.Sweep(0)
+	if _, err := os.Stat(filepath.Join(dir, "README.md")); err != nil {
+		t.Fatalf("刷新在飞时被领用目录不得被 Sweep 删除: %v", err)
+	}
+
+	select {
+	case r := <-resCh:
+		if r.err != nil {
+			t.Fatalf("Ensure(新head) 应经增量刷新成功（回落全新克隆=目录被删的旁证）: %v", r.err)
+		}
+		if r.dir != dir {
+			t.Fatalf("增量刷新应复用同一目录: got %s want %s（原目录被 Sweep 删后回落了全新克隆）", r.dir, dir)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Ensure(新head) 未在限时内返回")
+	}
+
+	b, err := os.ReadFile(filepath.Join(dir, "README.md"))
+	if err != nil || string(b) != "# fixture v2\n" {
+		t.Fatalf("工作树应已刷新到 v2: %q (%v)", b, err)
+	}
+	p.Release(v2)
 }

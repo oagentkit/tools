@@ -44,9 +44,17 @@ type Pool struct {
 	// InsecureTLSOf 平台是否免 TLS 校验。
 	InsecureTLSOf func(platform string) bool
 
-	mu      sync.Mutex
+	mu sync.Mutex
+	// entries 当前登记的工作副本（key → 条目）。
 	entries map[string]*wcEntry
-	group   singleflight.Flight[string]
+	// inflight 领用刷新中的目录集合（tools#108）：claimStale 摘牌即登记、
+	// refreshClaim 返回（成功重挂/失败回落两路）注销。刷新窗口内条目不在
+	// entries，目录对「只按 entries 构建保护集合」的 Sweep 孤儿扫描不可见，
+	// ModTime 过 TTL 即被 os.RemoveAll——正在刷新的工作副本被静默删掉，
+	// fetch 半路报错、Ensure 回落整次全新浅克隆。保护集合跟着领用走：
+	// Sweep 把在飞目录并入 live。
+	inflight map[string]bool
+	group    singleflight.Flight[string]
 }
 
 type wcEntry struct {
@@ -63,7 +71,7 @@ func NewPool(root string, log logx.Logger) *Pool {
 	if log == nil {
 		log = logx.Nop()
 	}
-	return &Pool{Root: root, Log: log, entries: map[string]*wcEntry{}}
+	return &Pool{Root: root, Log: log, entries: map[string]*wcEntry{}, inflight: map[string]bool{}}
 }
 
 // registerRetryMax "登记后丢失"重试上限：条目只可能被 Sweep/refresh 重挂删除，
@@ -125,6 +133,8 @@ func (p *Pool) hitExisting(k string) (dir string, ok bool) {
 // 领用即摘牌（rc++ 与 delete 同临界区原子完成）：刷新窗口内旧 key 不可再命中——
 // 否则并发 Ensure(旧head) 会拿到正被 checkout --force 重写的工作树（撕裂读），
 // 且其 Release 因条目已重挂新 key 而 no-op，rc 永久泄漏、Sweep 永不回收。
+// 摘牌的同时登记 in-flight（tools#108）：条目离开了 entries，目录对 Sweep 的
+// 保护必须换载体——否则孤儿扫描把在飞刷新当泄漏目录删掉。
 func (p *Pool) claimStale(key WorktreeKey) *wcEntry {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -135,6 +145,7 @@ func (p *Pool) claimStale(key WorktreeKey) *wcEntry {
 			e.key.HeadSHA != key.HeadSHA {
 			e.refCount++
 			delete(p.entries, k)
+			p.inflight[e.dir] = true
 			return e
 		}
 	}
@@ -142,8 +153,14 @@ func (p *Pool) claimStale(key WorktreeKey) *wcEntry {
 }
 
 // refreshClaim 对领用的保留目录做增量刷新。ok=false 表示刷新失败（已释放领用，
-// 调用方回落全新克隆）。
+// 调用方回落全新克隆）。返回即注销 in-flight（tools#108）：成功路径条目已重挂
+// entries（保护回归 entries 载体），失败路径目录交回 Sweep/孤儿扫描按 TTL 回收。
 func (p *Pool) refreshClaim(ctx context.Context, k string, key WorktreeKey, claim *wcEntry, token string) (dir string, ok bool) {
+	defer func() {
+		p.mu.Lock()
+		delete(p.inflight, claim.dir)
+		p.mu.Unlock()
+	}()
 	if err := p.refresh(ctx, claim.dir, key, token); err != nil {
 		// 刷新失败（force push 抹掉旧引用等）→ 回落全新克隆。条目已随领用摘牌，
 		// 不回挂——checkout 中途失败的工作树可能撕裂，回挂旧 key 会让后续同
@@ -350,17 +367,23 @@ func runGit(ctx context.Context, args []string, insecureTLS bool) error {
 // Sweep 清理泄漏的沙箱目录（兜底 TTL 扫描）。
 // 只回收引用归零且超 TTL 的条目与孤儿目录——rc>0 的在用目录一律保留
 // （长任务超 TTL 时被删即是生产事故），因此 TTL 应配置为大于最长任务时长；
-// 进程崩溃导致的泄漏目录（条目随进程消失）由下方孤儿扫描兜底。
+// 在飞刷新的目录（claimStale 已摘牌、refreshClaim 未返回，tools#108）同样
+// 一律保留——「TTL 大于最长任务时长」挡不住这个窗口：被领用的目录是上一次
+// 克隆留下的，隔天再审早已过 TTL 而刷新本身还在飞。进程崩溃导致的泄漏目录
+// （条目随进程消失）由下方孤儿扫描兜底。
 func (p *Pool) Sweep(ttl time.Duration) {
 	p.mu.Lock()
 	var stale []string
-	live := make(map[string]bool, len(p.entries))
+	live := make(map[string]bool, len(p.entries)+len(p.inflight))
 	for k, e := range p.entries {
 		live[e.dir] = true
 		if e.refCount <= 0 && time.Since(e.lastUsed) > ttl {
 			stale = append(stale, e.dir)
 			delete(p.entries, k)
 		}
+	}
+	for d := range p.inflight {
+		live[d] = true
 	}
 	p.mu.Unlock()
 	for _, d := range stale {
