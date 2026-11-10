@@ -27,6 +27,7 @@
 测试按 issue 号命名新增 5 条回归用例；全仓 go test ./... 全绿。
 * style: staticcheck QF1008——ToolInfo 嵌入字段选择器去显式 ParamsOneOf
 
+- 杂务(deps)：依赖地板追到最新——github.com/oekit/pkg v0.43.0
 - 杂务(deps)：依赖地板追到最新——github.com/oekit/concurrency v0.32.0
 
 | 依赖 | 现地板 | 抬到 |
