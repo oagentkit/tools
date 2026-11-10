@@ -192,6 +192,37 @@ func envelopeErrMsg(raw json.RawMessage) string {
 	return s
 }
 
+// envelopeHasError 信封错误存在判定（tools#110）：error 键存在即失败，
+// null/缺省 = 无失败。文案与存在性分开判——对象**没有 message 键**的形态
+// （{"error":{"code":429,"status":"RESOURCE_EXHAUSTED"}}）按「有失败、无文案」
+// 处理，调取方须以原文兜文案，不得因文案空而把失败当成功（gemini 侧曾据此
+// 把错误信封吞成空响应触发全文兜底）。
+func envelopeHasError(raw json.RawMessage) bool {
+	s := strings.TrimSpace(string(raw))
+	return s != "" && s != "null"
+}
+
+// envelopeFallbackErrMsg 兜底前的 error 形态复查（tools#110）：主结构解析失败
+// 但 stdout 里的 JSON 含 error 信封时，不得把错误原文当最终回答兜底。只取
+// error 键宽松重析（RawMessage 收一切形态）——主解析的失败常是**其它字段**
+// 的形态漂移（response/stats 类型变了），error 在场的事实不随它失效。重析
+// 仍失败或 error 缺席返回空串（允许兜底）。
+func envelopeFallbackErrMsg(stdout string) string {
+	var errOnly struct {
+		Error json.RawMessage `json:"error"`
+	}
+	if err := parseJSONOut(stdout, &errOnly); err != nil {
+		return ""
+	}
+	if !envelopeHasError(errOnly.Error) {
+		return ""
+	}
+	if msg := envelopeErrMsg(errOnly.Error); msg != "" {
+		return msg
+	}
+	return strings.TrimSpace(string(errOnly.Error))
+}
+
 // envelopeResult 信封结果装配：信封 error 如实上抛（部分错误形态 exit 仍为 0，
 // 只能从信封识别——与 mimo/gemini 同纪律，曾把错误信封解析成功后以空 text
 // 触发全文兜底当成功返回）；解析失败或 text 为空时全文兜底（版本差异/日志混入）。

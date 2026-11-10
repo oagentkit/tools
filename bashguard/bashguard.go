@@ -84,12 +84,21 @@ type Policy struct {
 	DestructiveFlags []string
 	// DestructiveArgs 命中即不可逆的参数（**前缀**匹配："of=" 命中 "of=/dev/sda"）。
 	DestructiveArgs []string
+	// ExecFlags 不可逆面的内嵌命令旗标（tools#107）：flag 的载荷是一段内核
+	// 命令（find -exec CMD [arg…] ; / + 形态）。不可逆判定对每段载荷按内核
+	// 再判——包装不得洗白内核（与 xargs/sudo/env 剥壳同一条纪律）：find 登记
+	// 在只读表、判定链把已注册命令的参数当数据，rm -rf 写进 -exec 段曾整体
+	// 漏出不可逆档。只在不可逆规则表里有意义；载荷段以 ";" 或 "+" token 收界
+	//（find 语法），缺界取余段保守判定。
+	ExecFlags []string
 }
 
 // Table 策略表。
 type Table struct {
 	Commands map[string]Policy
-	// Destructive 不可逆规则表：命令名 → 判据（只用 Policy 的三个 Destructive* 字段）。
+	// Destructive 不可逆规则表：命令名 → 判据（Policy 的 Destructive* 三字段
+	// 之外还消费 Subcommands / SafeFlags——子命令定位与 git 族规则，tools#107——
+	// 与 ExecFlags——内嵌命令载荷，tools#107）。
 	//
 	// 与只读表**分开**：只读表只放只读命令（"不在只读策略表" 是既有语义），
 	// 而不可逆判据要覆盖 rm / mkfs / dd 这类写命令。键尾的 "*" 表示前缀族

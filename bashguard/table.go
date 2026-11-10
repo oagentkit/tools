@@ -247,5 +247,33 @@ func defaultDestructive() map[string]Policy {
 		}},
 		// 清日志：--vacuum-* 把旧日志真删掉
 		"journalctl": {DestructiveFlags: []string{"--vacuum-time", "--vacuum-size", "--vacuum-files"}},
+		// find 批量删除（tools#107）：-delete 是批量不可逆删除；-exec/-execdir/
+		// -ok/-okdir 的载荷是一段内核命令，rm -rf 写进去与裸 rm -rf 同效——
+		// ExecFlags 让判定链对段内命令再判一次（包装不得洗白内核）。-exec 段里
+		// 是只读内核（grep）不受影响；-ok/-okdir 每次要交互确认、破坏性弱于
+		// -exec，但同样能删文件，保守一并纳入。
+		"find": {DestructiveArgs: []string{"-delete"},
+			ExecFlags: []string{"-exec", "-execdir", "-ok", "-okdir"}},
+		// git 家族（tools#107 同表缺口）：历史改写 / 强推 / 强制清理不可逆
+		//（下游 jumpserver-kit 自维护的 destructiveGit 同判，生态共识已有）。
+		// SafeFlags 登记 git 全局前置旗：splitSubcommand 按**本层白名单**消费
+		// 前置旗后才能定位子命令——白名单为空时 `-C dir` 直接判「flag 不在
+		// 本层安全表」退进兜底循环，兜底把 --force 丢在子命令之前，`git -C dir
+		// push --force` 曾据此漏判。
+		"git": {SafeFlags: map[string]FlagKind{
+			"-C":                   FlagString,
+			"-c":                   FlagString,
+			"--git-dir":            FlagString,
+			"--work-tree":          FlagString,
+			"--no-pager":           FlagBool,
+			"--no-optional-locks":  FlagBool,
+			"--no-replace-objects": FlagBool,
+			"--literal-pathspecs":  FlagBool,
+		}, Subcommands: map[string]Policy{
+			"reset":         {DestructiveFlags: []string{"--hard"}},
+			"clean":         {DestructiveFlags: []string{"-f", "--force"}},
+			"push":          {DestructiveFlags: []string{"-f", "--force", "--force-with-lease"}},
+			"filter-branch": {Destructive: true},
+		}},
 	}
 }
