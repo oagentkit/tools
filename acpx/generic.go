@@ -98,14 +98,25 @@ func (g *GenericAgent) Run(ctx context.Context, req RunRequest) (*RunResult, err
 
 // validateTemplate 模板合法性（fail-fast，配置错误在首跑前暴露）：占位符必须
 // 独占一个参数位——"--model={model}" 这类内联形态不会被展开、Capabilities 也
-// 推导不到，会以字面量泄漏进 argv 静默错跑（收口轮修）。
+// 推导不到，会以字面量泄漏进 argv 静默错跑（收口轮修）；且模板**恰含一个**
+// 独占参数位的 {prompt}（tools#126）：漏写任务载体时 prompt 从不进 argv，
+// 而 RunRequest.validate 强制 Prompt 非空——API 契约上的必达输入被模板静默
+// 丢弃，运行照常「成功」返回 CLI 固定输出，与本仓「请求了即须兑现，拒绝
+// 静默降级」的纪律相悖。多写同样错（首个吞 prompt、其余收空串），一并拦下。
 func validateTemplate(argv []string) error {
+	promptCount := 0
 	for _, a := range argv {
 		for _, ph := range []string{"{prompt}", "{model}", "{session}"} {
 			if a != ph && strings.Contains(a, ph) {
 				return fmt.Errorf("acpx: 模板参数 %q 内联占位符 %s（占位符须独占参数位，如 \"--model\", \"{model}\")", a, ph)
 			}
 		}
+		if a == "{prompt}" {
+			promptCount++
+		}
+	}
+	if promptCount != 1 {
+		return fmt.Errorf("acpx: 模板须恰含一个 {prompt} 占位符（实得 %d）——任务载体缺失时 prompt 被静默丢弃，RunRequest 的 Prompt 是必达输入", promptCount)
 	}
 	return nil
 }

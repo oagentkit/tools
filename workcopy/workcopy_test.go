@@ -266,7 +266,7 @@ func TestCloneURLStripsAPISuffix(t *testing.T) {
 	}
 	for _, c := range cases {
 		got := cloneURL(c.base, "o", "r", "tok")
-		want := "https://oauth2:tok@" + c.host + "/o/r.git"
+		want := "https://" + c.host + "/o/r.git"
 		if got != want {
 			t.Errorf("cloneURL(%q) = %q, want %q", c.base, got, want)
 		}
@@ -274,6 +274,31 @@ func TestCloneURLStripsAPISuffix(t *testing.T) {
 	// file:// 直通（e2e fixture 场景），不嵌凭证
 	if got := cloneURL("file:///tmp/repo", "o", "r", "tok"); got != "file:///tmp/repo" {
 		t.Errorf("file:// 应直通，得到 %q", got)
+	}
+}
+
+// TestCloneURLNoTokenInURL 回归（tools#124）：clone URL 不得含 token——带
+// userinfo 的 URL 会被 git 逐字写进 .git/config 持久落盘；鉴权改由
+// authGitArgs 的进程级 -c 参数承载。
+func TestCloneURLNoTokenInURL_Issue124(t *testing.T) {
+	const token = "sup3rs3cret-token"
+	for _, base := range []string{
+		"https://git.example.com/api/v1", "http://gitea.internal:3000",
+		"https://gitlab.example.com/api/v4", "git.example.com",
+	} {
+		got := cloneURL(base, "o", "r", token)
+		if strings.Contains(got, token) || strings.Contains(got, "oauth2:") {
+			t.Errorf("cloneURL(%q)=%q 不得含凭证", base, got)
+		}
+	}
+	// http(s) 鉴权参数形态：-c 键值对、Basic 凭证。
+	auth := authGitArgs("https://", token)
+	if len(auth) != 2 || auth[0] != "-c" || !strings.HasPrefix(auth[1], "http.extraheader=Authorization: Basic ") {
+		t.Fatalf("authGitArgs 形态不符: %v", auth)
+	}
+	// file:// 与空 token 无鉴权参数。
+	if authGitArgs("file://", token) != nil || authGitArgs("https://", "") != nil {
+		t.Fatal("file:// 与空 token 应返回 nil")
 	}
 }
 
@@ -375,13 +400,13 @@ func TestScrubRedactsTokenInPrepareError(t *testing.T) {
 }
 
 func TestCloneURLPreservesScheme(t *testing.T) {
-	// 回归：内网 http:// 地址不得被强制升级 https
+	// 回归：内网 http:// 地址不得被强制升级 https（tools#124 起无凭证形态）
 	got := cloneURL("http://gitea.internal:3000", "o", "r", "tok")
-	if !strings.HasPrefix(got, "http://oauth2:tok@gitea.internal:3000/o/r.git") {
+	if got != "http://gitea.internal:3000/o/r.git" {
 		t.Fatalf("http scheme 应保留: %q", got)
 	}
 	got = cloneURL("gitea.internal", "o", "r", "tok")
-	if !strings.HasPrefix(got, "https://oauth2:tok@gitea.internal/o/r.git") {
+	if got != "https://gitea.internal/o/r.git" {
 		t.Fatalf("无 scheme 应补 https: %q", got)
 	}
 }
