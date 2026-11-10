@@ -143,7 +143,7 @@ func (s *Searxng) AsTool() tool.BaseTool {
 	// eino jsonschema 对无 `=` 的裸标签**整条静默丢弃**（同族静默失效编译期
 	// 不可见）——守卫把它变成构造期 panic，与本函数 panic 契约同族。
 	if info, ierr := t.Info(context.Background()); ierr == nil && info != nil && info.ParamsOneOf != nil {
-		if js, jerr := info.ParamsOneOf.ToJSONSchema(); jerr == nil && js != nil && js.Properties != nil {
+		if js, jerr := info.ToJSONSchema(); jerr == nil && js != nil && js.Properties != nil {
 			if q, ok := js.Properties.Get("query"); !ok || q == nil || q.Description == "" {
 				panic("searxng: searchIn.Query 的 jsonschema description 未进 schema——无 `=` 的裸标签被 eino 静默丢弃，须用 `description=...` 键值形态（tools#128）")
 			}

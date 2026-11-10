@@ -23,7 +23,7 @@ func TestSearchInDescriptionReachesSchema_Issue128(t *testing.T) {
 	if info == nil || info.ParamsOneOf == nil {
 		t.Fatal("工具应有参数 schema")
 	}
-	js, err := info.ParamsOneOf.ToJSONSchema()
+	js, err := info.ToJSONSchema()
 	if err != nil || js == nil || js.Properties == nil {
 		t.Fatalf("应解出 JSON schema: %v", err)
 	}
