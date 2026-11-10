@@ -2,6 +2,31 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.14.4] — 2026-11-11
+
+### 修复(workcopy,bashguard,acpx,websearch)：五单清零——token 不落盘、模板任务载体哨兵、信封对象回退、schema 描述守卫（#124-#128）
+
+* fix(workcopy,bashguard,acpx,websearch): 五单清零——token 不落盘、不可逆判定全量面、模板任务载体哨兵、信封对象回退、schema 描述守卫（#124 #125 #126 #127 #128）
+- #124 workcopy token 不再嵌 clone URL（git 会把带 userinfo 的 URL 逐字写进
+  .git/config 持久落盘）：clone/fetch 经 `-c http.extraheader=Authorization:…`
+  进程级注入 Basic 凭证，config 里的 origin URL 恒为无凭证形态；refresh 从
+  origin URL 反推 scheme 决定是否带鉴权参数。argv 秒级瞬时可见性替代
+  小时/天级持久落盘面
+- #125 bashguard 不可逆判定吃全量 AllCalls 的修复已在此前 tools#44 轮落地，
+  本轮补回归钉（touch && rm -rf / 三形态），回执关单
+- #126 acpx validateTemplate 要求模板恰含一个独占参数位的 {prompt}——漏写
+  任务载体时 prompt 被静默丢弃而运行照常「成功」，与 RunRequest 强制 Prompt
+  非空自相矛盾；多写同样拦
+- #127 envelopeErrMsg 对象形态无 message 键/为空时回退原文——「其余形态
+  回退原文」曾对任何 JSON 对象结构性不可达，错误信封被吞成无失败经全文
+  兜底变成「成功」的垃圾正文
+- #128 websearch jsonschema 裸标签换 description= 键值形态（eino 按 key=
+  value 切分、无 = 的裸标签整条静默丢弃，「用领域/技术术语」指引从未到达
+  模型）；AsTool 加构造期守卫（description 缺失即 panic），静默失效变构造
+  期失败
+测试按 issue 号命名新增 5 条回归用例；全仓 go test ./... 全绿。
+* style: staticcheck QF1008——ToolInfo 嵌入字段选择器去显式 ParamsOneOf
+
 ## [v0.14.3] — 2026-11-10
 
 ### 修复(bashguard)：「在别处执行」包装器的内层命令按内核判不可逆（#117）
