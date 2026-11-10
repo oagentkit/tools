@@ -4,6 +4,44 @@
 
 ## [v0.14.3] — 2026-11-10
 
+### 修复(bashguard)：「在别处执行」包装器的内层命令按内核判不可逆（#117）
+
+容器/命名空间/切用户/瞬态服务类包装器的内层命令此前不在判定链上，
+docker exec web rm -rf /data 落 write 档而非 destructive，同一效果两档判定：
+- kubectl 登记在不可逆表只认 delete 子命令，exec 使 destructiveKernel 早退；
+- chroot /host /bin/rm 与 systemd-run /bin/rm 的内层是绝对路径，
+  kernelScan 只认裸命令名；
+- su -c 的内核是 shell 文本，argv 定位取不到。
+修法按 issue 主张表驱动：Policy.InnerCmd（名字 → 内层命令定位规则
+InnerCmdLoc），判定面复用既有机制——
+- 定位段交 kernelScan 全 token 扫描（与 #114 find -exec 的 execPayloadScan
+  同法，段内可再包调度器），钩在 destructiveVerdict 规则路径尾部，
+  sudo chroot … 这类外层调度器经 kernelScan 委派同样命中；
+- 段首绝对路径按 basename 再查一次规则；
+- 旗标值形态（su -c/--command/--session-command）按 shell 文本走
+  Analyze 再判，宿主自建规则在值文本里同样生效；
+- 与 #109 的 kernelScan 兜底衔接：docker/podman/nsenter 裸形态本就由
+  全 token 扫描判到，扩表后归因更准（原因串指到包装器与内层），测试
+  收作对照组钉住不退化。
+覆盖 issue 所列 8 类形态：docker/podman exec、kubectl exec 的 --、
+docker run|create image 后、chroot 第二操作数、nsenter -- 后、su -c 值
+再判、systemd-run 首操作数。反证面同钉：内层 grep/ls/可逆 rm 不误报。
+Closes oagentkit/tools#117
+
+- 杂务(deps)：依赖地板追到最新——github.com/oagentkit/textx v0.10.7
+
+| 依赖 | 现地板 | 抬到 |
+|---|---|---|
+| `github.com/oagentkit/textx` | `v0.10.6` | `v0.10.7` |
+## 为什么
+矩阵的**发版时刻地板时效**门禁（`verify_tag_floor --ref HEAD`）要求：各仓 HEAD
+（= 下次发版会发出去的内容）的依赖地板，相对那一刻的依赖最新版本，不能已落后。
+oekit 基座与矩阵模块都在高频发版 ⇒ 地板是**跑步机**，落后一格就会判红。
+## 兼容性实测
+本工具在提交前跑完 `go build` / `go vet` / `go test -race -count=1 ./...`（全绿才提交）
+与 `go mod tidy -diff`（无漂移）⇒ 改动**只影响依赖版本**，零行为差异。
+只改 `go.mod` / `go.sum` ⇒ 不需要 CHANGELOG 条目（版本段由下次发版的 `prewrite` 生成）。
+
 - 杂务(deps)：依赖地板追到最新——github.com/oekit/concurrency v0.31.2
 
 | 依赖 | 现地板 | 抬到 |
@@ -236,20 +274,6 @@ Merge branch 'main' into fix/audit-issues-63-62-61
 
 
 ## [v0.13.2] — 2026-11-08
-
-- 杂务(deps)：依赖地板追到最新——github.com/oekit/logx v0.8.10
-
-| 依赖 | 现地板 | 抬到 |
-|---|---|---|
-| `github.com/oekit/logx` | `v0.8.9` | `v0.8.10` |
-## 为什么
-矩阵的**发版时刻地板时效**门禁（`verify_tag_floor --ref HEAD`）要求：各仓 HEAD
-（= 下次发版会发出去的内容）的依赖地板，相对那一刻的依赖最新版本，不能已落后。
-oekit 基座与矩阵模块都在高频发版 ⇒ 地板是**跑步机**，落后一格就会判红。
-## 兼容性实测
-本工具在提交前跑完 `go build` / `go vet` / `go test -race -count=1 ./...`（全绿才提交）
-与 `go mod tidy -diff`（无漂移）⇒ 改动**只影响依赖版本**，零行为差异。
-只改 `go.mod` / `go.sum` ⇒ 不需要 CHANGELOG 条目（版本段由下次发版的 `prewrite` 生成）。
 
 - 杂务(deps)：依赖地板追平 oekit BOM v0.2.9——pkg v0.37.4 / logx v0.8.10 / concurrency v0.28.4
 
@@ -806,20 +830,6 @@ guardx v0.9.0 新增了 toolfail 与 sandbox 两个 tier0 原语，
 只能靠后续版本补齐（tag 受 protect-tags ruleset 保护不能重打）。
 
 
-- 文档(changelog)：按新生成器规则重生成 CHANGELOG.md
-
-生成器修复（oagentkit/matrix-tools#43）落地：
-① `[round-N] ` 前缀被剥离 → conventional commit 解析不再失效，
-   **commit body 保留**（此前整段被丢弃，发布说明只剩标题）；
-② 非 conventional 提交也保留 body；
-③ `--check` 识别「待发版段」（预写了但还没打 tag 的那段）。
-本 PR 恢复的是**本就在 commit body 里**的正文（迁移步骤、代码块、
-判据锚点）——此前被 `[round-N] ` 前缀导致的解析失败丢弃了。
-**没有任何发布说明内容被删除**：删除的行都能在新增行里找到对应
-（规范化掉 `(#N)` 与 `[round-N] ` 前缀后逐行比对）。
-关联：oagentkit/matrix-tools#43、oagentkit/matrix-tools#40
-
-
 ## [v0.10.0] — 2026-10-19
 
 - 与 v0.9.1 相比无代码差异（版本号/打包变更）
@@ -1125,19 +1135,6 @@ $ grep -v indirect tools/go.mod | grep -E "^\s+[a-z].*/"
 - tag 必须落在 CHANGELOG 提交之后（下游 go get 拿到的是 tag 快照）
 - 警告：无参重生成会吞掉待发版段，--next-version 是唯一能产出待发版段的开关
 - 本仓相关提醒（见正文）
-
-- 文档(changelog)：按新生成器规则重生成 CHANGELOG.md
-
-生成器修复（oagentkit/matrix-tools#43）落地：
-① `[round-N] ` 前缀被剥离 → conventional commit 解析不再失效，
-   **commit body 保留**（此前整段被丢弃，发布说明只剩标题）；
-② 非 conventional 提交也保留 body；
-③ `--check` 识别「待发版段」（预写了但还没打 tag 的那段）。
-本 PR 恢复的是**本就在 commit body 里**的正文（迁移步骤、代码块、
-判据锚点）——此前被 `[round-N] ` 前缀导致的解析失败丢弃了。
-**没有任何发布说明内容被删除**：删除的行都能在新增行里找到对应
-（规范化掉 `(#N)` 与 `[round-N] ` 前缀后逐行比对）。
-关联：oagentkit/matrix-tools#43、oagentkit/matrix-tools#40
 
 
 - 测试(sast)：测试替身 nopLogger 收编 logx.Nop()——Enabled 恒 false 免掉昂贵参数求值；deps 地板追到最新（concurrency v0.23.3/logx v0.8.2/pkg v0.31.2）
