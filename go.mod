@@ -8,7 +8,7 @@ require (
 	github.com/cloudwego/eino v0.9.21
 	github.com/oagentkit/guardx v0.24.1
 	github.com/oagentkit/runtime v0.12.6
-	github.com/oagentkit/textx v0.10.6
+	github.com/oagentkit/textx v0.10.7
 	github.com/oekit/concurrency v0.31.2
 	github.com/oekit/logx v0.9.1
 	github.com/oekit/pkg v0.41.1
