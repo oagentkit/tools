@@ -45,6 +45,38 @@ const (
 	FlagOptional FlagKind = "optional" // 可带可不带参数（按字面形态分辨）
 )
 
+// InnerCmdLoc 「在别处执行」包装器的内层命令定位形态（tools#117）。
+//
+// 容器（docker/podman exec|run）、命名空间（chroot/nsenter）、切用户（su -c）、
+// 瞬态服务（systemd-run）的内层命令与裸命令同效：docker exec web rm -rf /data
+// 的不可逆性在 rm 上，不在 docker 上。这些包装器此前不在判定链上，内层语义
+// 在判定模型里没有位置（tools#117）——InnerCmd 给它位置。
+type InnerCmdLoc string
+
+const (
+	// InnerAfterOperand 跳过本层 flag 后再跳过一个裸操作数（容器名/镜像名/
+	// 新根），其后整段是内层命令：docker exec CONTAINER CMD、docker run …
+	// IMAGE CMD、chroot NEWROOT CMD。flag 值归属不猜（exec -u root 的 root
+	// 会被当跳过的裸操作数）——定位歪了只会让段变宽不会变窄，段内
+	// kernelScan 全 token 兜底照常命中。
+	InnerAfterOperand InnerCmdLoc = "after-operand"
+	// InnerAfterDashes `--` 之后的整段是内层命令（kubectl exec POD -- CMD、
+	// nsenter … -- CMD）；缺 `--` 退化 InnerAfterOperand。
+	InnerAfterDashes InnerCmdLoc = "after-dashes"
+	// InnerFirstOperand 跳过本层 flag 后首个裸操作数起的整段是内层命令
+	//（systemd-run [--unit=x] CMD …：首个操作数就是内核程序，可含绝对路径）。
+	InnerFirstOperand InnerCmdLoc = "first-operand"
+	// InnerFlagValue 旗标的**值**按 shell 文本再判一次（su -c 'rm -rf /data'：
+	// 值本身就是命令行，argv 定位取不到）。旗标名单在 InnerCmdRule.Flags。
+	InnerFlagValue InnerCmdLoc = "flag-value"
+)
+
+// InnerCmdRule 单条内层命令定位规则（tools#117）。
+type InnerCmdRule struct {
+	Loc   InnerCmdLoc // 定位形态
+	Flags []string    // InnerFlagValue 专用：承载命令文本的旗标（su 的 -c/--command）
+}
+
 // Policy 单命令策略。
 type Policy struct {
 	// ReadOnly 命令本体是否只读。
@@ -91,6 +123,15 @@ type Policy struct {
 	// 漏出不可逆档。只在不可逆规则表里有意义；载荷段以 ";" 或 "+" token 收界
 	//（find 语法），缺界取余段保守判定。
 	ExecFlags []string
+	// InnerCmd 「在别处执行」包装器的内层命令定位规则（tools#117）：容器/
+	// 命名空间/切用户/瞬态服务里跑的内核与裸命令同效同档（docker exec web
+	// rm -rf /data 与 rm -rf /data 必须同判 destructive）——定位形态见
+	// InnerCmdLoc。与 ExecFlags（find -exec，tools#107）同一条纪律：包装不得
+	// 洗白内核，已注册命令的参数不当纯数据放行。只在不可逆规则表里有意义；
+	// 可多条（su 的 -c 值与登录尾段各一条）。子命令形态（docker exec）登记在
+	// Subcommands 对应子项的 InnerCmd 上，本层 InnerCmd 只服务无子命令形态
+	//（chroot/nsenter/su/systemd-run）。
+	InnerCmd []InnerCmdRule
 }
 
 // Table 策略表。
@@ -98,7 +139,8 @@ type Table struct {
 	Commands map[string]Policy
 	// Destructive 不可逆规则表：命令名 → 判据（Policy 的 Destructive* 三字段
 	// 之外还消费 Subcommands / SafeFlags——子命令定位与 git 族规则，tools#107——
-	// 与 ExecFlags——内嵌命令载荷，tools#107）。
+	// ExecFlags——内嵌命令载荷，tools#107——与 InnerCmd——「在别处执行」包装器
+	// 的内层命令定位，tools#117）。
 	//
 	// 与只读表**分开**：只读表只放只读命令（"不在只读策略表" 是既有语义），
 	// 而不可逆判据要覆盖 rm / mkfs / dd 这类写命令。键尾的 "*" 表示前缀族
