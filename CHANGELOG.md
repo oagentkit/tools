@@ -2,6 +2,48 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.14.3] — 2026-11-10
+
+- 杂务(deps)：依赖地板追到最新——github.com/oekit/concurrency v0.31.2
+
+| 依赖 | 现地板 | 抬到 |
+|---|---|---|
+| `github.com/oekit/concurrency` | `v0.31.1` | `v0.31.2` |
+| `github.com/oekit/logx` | `v0.9.0` | `v0.9.1` |
+## 为什么
+矩阵的**发版时刻地板时效**门禁（`verify_tag_floor --ref HEAD`）要求：各仓 HEAD
+（= 下次发版会发出去的内容）的依赖地板，相对那一刻的依赖最新版本，不能已落后。
+oekit 基座与矩阵模块都在高频发版 ⇒ 地板是**跑步机**，落后一格就会判红。
+## 兼容性实测
+本工具在提交前跑完 `go build` / `go vet` / `go test -race -count=1 ./...`（全绿才提交）
+与 `go mod tidy -diff`（无漂移）⇒ 改动**只影响依赖版本**，零行为差异。
+只改 `go.mod` / `go.sum` ⇒ 不需要 CHANGELOG 条目（版本段由下次发版的 `prewrite` 生成）。
+
+
+- feat/fix: bgjob marker 协议原语 + bashguard find/git 不可逆补口 + workcopy 在飞刷新保护 + acpx gemini/qwen 守门（#106 #107 #108 #110）
+
+feat(bgjob): 远程后台作业 marker 协议原语（#106）
+jumpserver-exec 手搓的「经 SSH 在远端起脱离会话的长任务 + 轮询 + 收尾」
+协议原语化（提案正文圈定的最小面，不做进程树管理、不做日志轮转）：四条
+实弹坑全部协议化并钉成契约（doc.go 验收项）——
+1. 退出码走 marker 文件（输出路径 + ".rc"）：输出文件早就在场，判终态
+   只认 marker（running/finished+退出码/removed 三态）；
+2. 命令在内层 shell 跑、marker 由外层 wrapper 写：任务内任何 exit 只死
+   内层，\0 照常落 marker（拼进用户命令的写法在裸 exit 上永远 RUNNING）；
+3. marker 路径 Go 侧单源一次拼定、命令整段单引号包裹：".rc 拼进引号内变
+   p.rc.rc、探测永远 RUNNING" 的 P0 活虫在协议层不可能复发；
+4. 清理自证：RUNNING 拒绝且文件原样、FINISHED 后 rm + [ -e ] 自证 REMOVED
+   才报已清理、REMOVED 幂等。
+- Session 小接口收窄为 Exec(string) (stdout, code, err)，宿主各自适配；
+- 边界按提案：不做进程树管理；不做日志轮转（输出重定向由调用方经
+  WithOutputPath 给定，必填、远端绝对路径）；远端契约 POSIX sh + setsid
+  + nohup；
+- 测试经本地真 shell 背书协议（比手搓 fake 模拟远端状态机可信）：
+  exit 3 → finished/3、裸 exit marker 照写、路径含空格/单引号逐字、
+  RUNNING 清理拒绝且文件原样、命令原文钉双层结构与单源拼接。
+Closes oagentkit/tools#106
+
+
 ## [v0.14.2] — 2026-11-10
 
 ### 修复(bashguard,acpx,workcopy)：不可逆内核定位/只读门/nil logger/部分文本终态守门收口（#100 #101 #102 #103 #104 #105）
