@@ -401,6 +401,78 @@ func TestDestructiveFindBatchDelete(t *testing.T) {
 	}
 }
 
+// TestDestructiveThroughRemoteWrappers 回归（tools#117）：容器/命名空间/切用户/
+// 瞬态服务类「在别处执行」包装器的内层命令与裸命令同效同档——
+// docker exec web rm -rf /data 与 rm -rf /data 必须同判 destructive。
+// 此前这类包装器不在判定链上（docker 不在 Commands 表走 kernelScan 兜底但
+// 内层取不到；kubectl 登记在不可逆表只认 delete 子命令，exec 早退；chroot/
+// systemd-run 的内层是绝对路径 /bin/rm，kernelScan 只认裸命令名；su -c 的
+// 内核是 shell 文本），同一效果两档判定。
+//
+// 前 6 例是名单内包装器对照组（tools#44/#100/#101 已判到，不得退化）；后 7 例
+// 是 issue 复现的漏报形态；再后是各家族变体（内层换绝对路径/换不可逆命令/
+// 叠调度器——包装不得洗白内核，两层都要判到）。
+func TestDestructiveThroughRemoteWrappers(t *testing.T) {
+	cases := []struct {
+		cmd         string
+		destructive bool
+	}{
+		// —— 对照组：名单内包装器（既有判定，正例不得退化）——
+		{"rm -rf /data", true},
+		{"sudo -n rm -rf /data", true},
+		{"xargs rm -rf", true},
+		{"env rm -rf /data", true},
+		{"nohup rm -rf /data", true},
+		{"timeout 5 rm -rf /data", true},
+		// —— issue #117 复现的 7 行漏报形态 ——
+		{"docker exec web rm -rf /data", true},
+		{"podman exec web rm -rf /data", true},
+		{"kubectl exec pod-1 -- rm -rf /data", true},
+		{"chroot /host /bin/rm -rf /data", true},
+		{"nsenter -t 1 -m -- rm -rf /data", true},
+		{"su - root -c 'rm -rf /data'", true},
+		{"systemd-run --unit=x /bin/rm -rf /data", true},
+		// —— 家族变体 ——
+		{"docker run alpine rm -rf /data", true},       // run：image 之后的操作数
+		{"podman run alpine rm -rf /data", true},       // podman run 同型
+		{"docker exec -u root web rm -rf /data", true}, // 前置旗值不得顶替内核
+		{"kubectl exec -c agent pod-1 -- rm -rf /data", true},
+		{"kubectl exec pod-1 -- mkfs.ext4 /dev/sda", true},         // 内层换不可逆命令
+		{"chroot /host rm -rf /data", true},                        // 内层裸命令名
+		{"nsenter -t 1 -m rm -rf /data", true},                     // 缺 -- 兜底形态
+		{"su root -c 'rm -rf /data'", true},                        // 无 login 破折号
+		{"su -c 'rm -rf /data'", true},                             // 最短形态
+		{"systemd-run --unit=x rm -rf /data", true},                // 内层裸命令名
+		{"systemd-run --unit=x /usr/bin/mkfs.ext4 /dev/sda", true}, // 绝对路径 + 前缀族规则
+		{"sudo docker exec web rm -rf /data", true},                // 外层调度器不洗白内层
+		{"docker exec web sudo rm -rf /data", true},                // 内层再包调度器
+		// —— 反证：内层非不可逆内核不得误报 ——
+		{"docker exec web grep -r x /", false},
+		{"podman exec web grep -r x /", false},
+		{"kubectl exec pod-1 -- grep -r x /", false},
+		{"chroot /host grep -r x /", false},
+		{"nsenter -t 1 -m -- grep -r x /", false},
+		{"su -c 'grep -r x /'", false},
+		{"systemd-run --unit=x grep -r x /", false},
+		{"docker exec web ls -la", false},      // 只读内核
+		{"docker exec web rm file.txt", false}, // rm 无递归 flag：可逆，同裸 rm 判据
+		{"docker run alpine rm file.txt", false},
+		{"docker ps", false}, // 无内层载荷的子命令
+		{"su root", false},   // 交互 shell，无 -c 命令文本
+		{"kubectl get pods", false},
+	}
+	for _, c := range cases {
+		d := Analyze(c.cmd, nil)
+		if d.Destructive != c.destructive {
+			t.Errorf("%q：不可逆应为 %v，实得 %v（原因 %q）", c.cmd, c.destructive, d.Destructive, d.DestructiveReason)
+			continue
+		}
+		if c.destructive && d.Risk() != RiskDestructive {
+			t.Errorf("%q：Risk 应为 destructive，实得 %s", c.cmd, d.Risk())
+		}
+	}
+}
+
 // TestDestructiveGitFamily 回归（tools#107 同表缺口）：git 家族的不可逆形态
 // ——历史改写/强推/强制清理。生态共识已有（下游 jumpserver-kit 自维护的
 // destructiveGit 同判），上游缺位。

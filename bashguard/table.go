@@ -241,10 +241,43 @@ func defaultDestructive() map[string]Policy {
 		// 强杀：杀掉的进程回不来
 		"kill":    {DestructiveArgs: []string{"-9", "KILL", "SIGKILL"}},
 		"killall": {DestructiveArgs: []string{"-9", "KILL", "SIGKILL"}},
-		// kubectl 删除：对象删掉就没了
+		// 「在别处执行」包装器（tools#117）：容器/命名空间/切用户/瞬态服务里
+		// 跑的内核命令与裸命令同效同档——docker exec web rm -rf /data 与
+		// rm -rf /data 必须同判。InnerCmd 是内层命令定位规则（形态见
+		// InnerCmdLoc），判定复用 execPayloadScan/kernelScan 机制（包装不得
+		// 洗白内核）；定位歪了只会让段变宽不会变窄，与 kernelScan 同一条
+		// 保守纪律。docker/podman/kubectl 是子命令形态（规则登记在子项），
+		// 其余直接登记在本层。
+		"docker": {Subcommands: map[string]Policy{
+			"exec":   {InnerCmd: []InnerCmdRule{{Loc: InnerAfterOperand}}},
+			"run":    {InnerCmd: []InnerCmdRule{{Loc: InnerAfterOperand}}},
+			"create": {InnerCmd: []InnerCmdRule{{Loc: InnerAfterOperand}}},
+		}},
+		"podman": {Subcommands: map[string]Policy{
+			"exec":   {InnerCmd: []InnerCmdRule{{Loc: InnerAfterOperand}}},
+			"run":    {InnerCmd: []InnerCmdRule{{Loc: InnerAfterOperand}}},
+			"create": {InnerCmd: []InnerCmdRule{{Loc: InnerAfterOperand}}},
+		}},
+		// kubectl 删除：对象删掉就没了；exec 的载荷在 `--` 之后（tools#117：
+		// 此前只登记 delete，exec 早退使内层 rm 漏出不可逆档）
 		"kubectl": {Subcommands: map[string]Policy{
 			"delete": {Destructive: true},
+			"exec":   {InnerCmd: []InnerCmdRule{{Loc: InnerAfterDashes}}},
 		}},
+		// chroot NEWROOT CMD：第二个操作数起是内核（常写绝对路径 /bin/rm）
+		"chroot": {InnerCmd: []InnerCmdRule{{Loc: InnerAfterOperand}}},
+		// nsenter … -- CMD：进宿主命名空间，破坏面比容器更大（nsenter -t 1
+		// 直达宿主根文件系统）；缺 `--` 退化取跳过旗标与一个裸操作数后的段
+		"nsenter": {InnerCmd: []InnerCmdRule{{Loc: InnerAfterDashes}}},
+		// su：-c/--command/--session-command 的值本身就是命令行（按 shell 文本
+		// 再判一次）；登录尾段（部分 su 实现会直接 exec，如 su root rm …）保守
+		// 同判
+		"su": {InnerCmd: []InnerCmdRule{
+			{Loc: InnerFlagValue, Flags: []string{"-c", "--command", "--session-command"}},
+			{Loc: InnerAfterOperand},
+		}},
+		// systemd-run：瞬态服务里跑的内核 = 首个裸操作数起的整段
+		"systemd-run": {InnerCmd: []InnerCmdRule{{Loc: InnerFirstOperand}}},
 		// 清日志：--vacuum-* 把旧日志真删掉
 		"journalctl": {DestructiveFlags: []string{"--vacuum-time", "--vacuum-size", "--vacuum-files"}},
 		// find 批量删除（tools#107）：-delete 是批量不可逆删除；-exec/-execdir/

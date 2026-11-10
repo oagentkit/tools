@@ -2,6 +2,7 @@ package bashguard
 
 import (
 	"fmt"
+	"path"
 	"strings"
 )
 
@@ -183,7 +184,13 @@ func (t *Table) destructiveVerdict(name string, argv []string) (bool, string) {
 	}
 	// 自身判据未命中再看内嵌命令载荷（tools#107）：find -exec rm -rf 的不可逆
 	// 性在段内 rm 上，find 自身的判据（-delete）看不到它。
-	return t.execPayloadScan(name, argv, rule)
+	if ok, why := t.execPayloadScan(name, argv, rule); ok {
+		return true, why
+	}
+	// 「在别处执行」包装器的内层载荷（tools#117）：docker exec web rm -rf 的
+	// 不可逆性在段内 rm 上，docker 自身不是可逆性命令——同 tools#107 的
+	// 找不到自身判据问题，对每类包装按定位规则取内层段再判。
+	return t.remoteExecScan(name, argv, rule)
 }
 
 // execPayloadScan 内嵌命令载荷的不可逆判定（tools#107）。
@@ -223,6 +230,138 @@ func (t *Table) execPayloadScan(name string, argv []string, rule Policy) (bool, 
 		}
 	}
 	return false, ""
+}
+
+// remoteExecScan 「在别处执行」包装器的内层不可逆判定（tools#117）。
+//
+// 容器（docker/podman exec|run|create）、命名空间（chroot/nsenter）、切用户
+// （su -c）、瞬态服务（systemd-run）的内层命令与裸命令同效：docker exec web
+// rm -rf /data 与 rm -rf /data 必须同档。此前一个都不在判定链上：
+//   - docker 走 kernelScan 兜底，但内层是绝对路径（chroot /host /bin/rm）时
+//     token 查不到规则（kernelScan 只认裸命令名），整体放行；
+//   - kubectl 登记在不可逆表（delete 子命令）使 destructiveKernel 对 exec
+//     早退，内层 rm 再也轮不到判定；
+//   - su -c 的内核是 shell 文本，argv 定位根本取不到。
+//
+// 修法按 issue 主张表驱动：Policy.InnerCmd（名字 → 定位规则，InnerCmdLoc），
+// 判定面复用既有机制——定位段交 kernelScan 全 token 扫描（与 execPayloadScan
+// 的 find -exec 段同法：段内可再包调度器，docker exec web sudo rm -rf /），
+// 段首绝对路径按 basename 再查一次规则，旗标值形态按 shell 文本走 Analyze
+// 再判（宿主自建规则在值文本里同样生效）。保守取舍与 kernelScan 一致：定位
+// 歪了只会让段变宽不会变窄，多报的代价只是多一次确认，漏报的代价是命令真跑了。
+func (t *Table) remoteExecScan(name string, argv []string, rule Policy) (bool, string) {
+	if len(rule.InnerCmd) == 0 && len(rule.Subcommands) == 0 {
+		return false, "" // 非包装器规则（或规则未声明内层载荷）：不参与
+	}
+	// 本层规则（无子命令形态：chroot / nsenter / su / systemd-run）
+	if ok, why := t.innerCmdScan(name, "", argv, rule.InnerCmd); ok {
+		return true, why
+	}
+	// 子命令形态（docker exec / kubectl exec …）：首个命中 Subcommands 键的
+	// token 之后整段归子命令（旗与值归属不猜——与 destructiveByRule 的兜底
+	// 循环同法，定位歪了由段内 kernelScan 兜住）
+	for i, tok := range argv {
+		subRule, ok := rule.Subcommands[tok]
+		if !ok {
+			continue
+		}
+		if ok, why := t.innerCmdScan(name, tok, argv[i+1:], subRule.InnerCmd); ok {
+			return true, why
+		}
+	}
+	return false, ""
+}
+
+// innerCmdScan 按定位规则逐条取内层段并判内核。
+func (t *Table) innerCmdScan(name, sub string, argv []string, rules []InnerCmdRule) (bool, string) {
+	prefix := name
+	if sub != "" {
+		prefix = name + " " + sub
+	}
+	for _, r := range rules {
+		if r.Loc == InnerFlagValue {
+			// 旗标值是 shell 文本：按命令行整体再判一次（su -c 'rm -rf /data'
+			// ——argv 定位取不到文本里的内核）
+			if val, flag, ok := innerFlagValue(argv, r.Flags); ok {
+				if d := Analyze(val, t); d.Destructive {
+					return true, fmt.Sprintf("%s 的 %s 值内层不可逆：%s", prefix, flag, d.DestructiveReason)
+				}
+			}
+			continue
+		}
+		if ok, why := t.innerKernelVerdict(locateInner(argv, r)); ok {
+			return true, fmt.Sprintf("%s 的内层内核不可逆：%s", prefix, why)
+		}
+	}
+	return false, ""
+}
+
+// locateInner 按定位形态取内层命令段。
+func locateInner(argv []string, r InnerCmdRule) []string {
+	switch r.Loc {
+	case InnerAfterDashes:
+		for i, a := range argv {
+			if a == "--" {
+				return argv[i+1:]
+			}
+		}
+		return skipFlagAndOperand(argv, 1) // 缺 -- 退化（kubectl exec POD CMD 兜底）
+	case InnerAfterOperand:
+		return skipFlagAndOperand(argv, 1)
+	case InnerFirstOperand:
+		return skipFlagAndOperand(argv, 0)
+	default:
+		return nil
+	}
+}
+
+// skipFlagAndOperand 跳过 flag token（值归属不猜）与 skip 个裸操作数，返回其后整段。
+func skipFlagAndOperand(argv []string, skip int) []string {
+	i := 0
+	for i < len(argv) && strings.HasPrefix(argv[i], "-") {
+		i++
+	}
+	for ; skip > 0 && i < len(argv); skip-- {
+		i++
+	}
+	return argv[i:]
+}
+
+// innerFlagValue 定位承载命令文本的旗标值：独立参数（-c VALUE）、内联长旗
+// （--command=VALUE）与联合短旗（-cVALUE）三形态。
+func innerFlagValue(argv []string, flags []string) (val, flag string, ok bool) {
+	for i, a := range argv {
+		for _, f := range flags {
+			if a == f && i+1 < len(argv) {
+				return argv[i+1], f, true
+			}
+			if strings.HasPrefix(a, f+"=") {
+				return strings.TrimPrefix(a, f+"="), f, true
+			}
+			// 联合短旗内联：-cVALUE（shell 拼接引号后的单 token 形态）
+			if len(f) == 2 && f[0] == '-' && f[1] != '-' &&
+				strings.HasPrefix(a, f) && len(a) > len(f) {
+				return a[len(f):], f, true
+			}
+		}
+	}
+	return "", "", false
+}
+
+// innerKernelVerdict 内层段的内核判定：段首可为绝对路径内核（chroot /host
+// /bin/rm、systemd-run /usr/bin/rm——kernelScan 只认裸命令名，/bin/rm 曾查
+// 不到规则整体放行），先按 basename 再查一次规则；其后仍交 kernelScan 全
+// token 扫描兜底（段内可再包调度器：docker exec web sudo rm -rf /data）。
+func (t *Table) innerKernelVerdict(inner []string) (bool, string) {
+	if len(inner) == 0 {
+		return false, ""
+	}
+	if base := path.Base(inner[0]); base != inner[0] {
+		if ok, why := t.destructiveVerdict(base, inner[1:]); ok {
+			return true, why
+		}
+	}
+	return t.kernelScan(inner)
 }
 
 // expandEnvSplitString 把 env 的 -S/--split-string 值原位展开成词序列
