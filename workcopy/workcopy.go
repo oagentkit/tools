@@ -1,12 +1,18 @@
 // Package workcopy Git 工作副本沙箱服务。
 // 浅克隆 base 默认分支 + fetch PR head + checkout，供 cli 插件在真实工作树上执行。
-// 凭证嵌在 clone URL 中，绝不落盘。singleflight 防并发重复 clone。
+// 凭证经进程级 `-c http.extraheader` 注入（tools#124）：token 不进 clone URL、
+// 不落 .git/config——config 里的 origin URL 恒为无凭证形态（`git clone <带
+// userinfo 的 URL>` 会把 URL 逐字写进 config，而目录按包头承诺保留至 TTL
+// Sweep，CLI agent 在工作树里 `cat .git/config` 即可取走宿主凭证）。
+// 代价与边界：`-c` 参数在 git 进程执行窗口内经 argv 可见（同 UID /proc），
+// 秒级窗口远小于原形态的小时/天级持久落盘面。singleflight 防并发重复 clone。
 // 引用归零后目录**保留**（供同 PR 下次审查增量复用，省 base 分支重克隆），
 // TTL 由 Sweep 兜底回收。
 package workcopy
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -267,6 +273,10 @@ func isPrNumber(s string) bool {
 	return true
 }
 
+// cloneURL 无凭证 clone URL（tools#124）：token 不再嵌 URL——带 userinfo 的
+// URL 会被 git 逐字写进 .git/config（remote.origin.url），而目录保留至 TTL
+// Sweep，token 即持久落盘。URL 只保留 host/path 形态；鉴权由 authGitArgs 的
+// 进程级 -c 参数承载（不落盘）。file:// 直通（本地 fixture 无鉴权面）。
 func cloneURL(baseURL, owner, repo, token string) string {
 	u := strings.TrimSuffix(strings.TrimSpace(baseURL), "/")
 	if strings.HasPrefix(u, "file://") {
@@ -281,7 +291,34 @@ func cloneURL(baseURL, owner, repo, token string) string {
 		scheme = u[:i+3]
 		u = u[i+3:]
 	}
-	return fmt.Sprintf("%soauth2:%s@%s/%s/%s.git", scheme, token, u, owner, repo)
+	return fmt.Sprintf("%s%s/%s/%s.git", scheme, u, owner, repo)
+}
+
+// authGitArgs http(s) git 操作的鉴权参数（tools#124）：Basic 凭证经
+// `http.extraheader` 进程级注入——git 只在本进程命令行里持有 token，不写
+// .git/config、不落盘。file:// 与无 http(s) 传输的命令返回 nil（无鉴权面）。
+//
+// 为什么是 extraheader 而不是 insteadOf/credential helper：insteadOf 仍要把
+// 凭证写进某处 config 才能生效（同样落盘）；credential helper 需要外部二进制
+// 与 helper 自身的存储纪律。`-c http.extraheader=Authorization: Basic …` 是
+// git 文档明确支持的进程级注入形态，argv 里的瞬时可见性（同 UID /proc）远
+// 小于原形态的小时/天级持久落盘。
+func authGitArgs(scheme, token string) []string {
+	if token == "" || (scheme != "http://" && scheme != "https://") {
+		return nil
+	}
+	auth := base64.StdEncoding.EncodeToString([]byte("oauth2:" + token))
+	return []string{
+		"-c", "http.extraheader=Authorization: Basic " + auth,
+	}
+}
+
+// schemeOf clone URL 的 scheme 前缀（无 scheme 视作 https——cloneURL 已补齐）。
+func schemeOf(u string) string {
+	if i := strings.Index(u, "://"); i >= 0 {
+		return u[:i+3]
+	}
+	return "https://"
 }
 
 func (p *Pool) prepare(ctx context.Context, key WorktreeKey, baseURL, token string) (string, error) {
@@ -304,11 +341,13 @@ func (p *Pool) prepare(ctx context.Context, key WorktreeKey, baseURL, token stri
 	}
 	url := cloneURL(baseURL, key.Owner, key.Repo, token)
 	insecureTLS := p.InsecureTLSOf != nil && p.InsecureTLSOf(key.Platform)
+	// 鉴权参数（tools#124）：进程级 -c 注入，token 不进 URL/config。
+	auth := authGitArgs(schemeOf(url), token)
 
 	steps := [][]string{
 		// clone 支持 `--` 终止选项解析：url/dir 此后恒为位置参数
-		{"git", "clone", "--depth", "1", "--branch", branch, "--", url, dir},
-		{"git", "-C", dir, "fetch", "--depth", "1", "origin", prRefspec(key.Platform, key.Number)},
+		append(append([]string{"git"}, auth...), "clone", "--depth", "1", "--branch", branch, "--", url, dir),
+		append(append([]string{"git"}, auth...), "-C", dir, "fetch", "--depth", "1", "origin", prRefspec(key.Platform, key.Number)),
 		{"git", "-C", dir, "checkout", "--force", "FETCH_HEAD"},
 	}
 	for _, args := range steps {
@@ -328,11 +367,22 @@ func (p *Pool) prepare(ctx context.Context, key WorktreeKey, baseURL, token stri
 // 浅对象已在库——这是"第二次审查少拉取"的收益来源），checkout --force 与
 // prepare 末步同款。origin/<默认分支> 不随刷新前移，base 端新鲜度以首次克隆
 // 为界（由保留 TTL 限定窗口）；默认分支大跨度强推场景由调用方全新克隆兜底
-// （refresh 失败即回落 prepare）。
+// （refresh 失败即回落 prepare）。fetch 鉴权同 prepare（tools#124）：origin
+// URL 恒为无凭证形态，token 经进程级 -c 参数临时注入。
 func (p *Pool) refresh(ctx context.Context, dir string, key WorktreeKey, token string) error {
 	insecureTLS := p.InsecureTLSOf != nil && p.InsecureTLSOf(key.Platform)
+	// 刷新路径没有现成 baseURL——从 config 的 origin URL 反推 scheme
+	// （file:// fixture 无鉴权面，authGitArgs 返回 nil）。
+	out, _, _, oerr := procx.Run(ctx, procx.RunRequest{
+		Argv: []string{"git", "-C", dir, "remote", "get-url", "origin"}, Timeout: 10 * time.Second,
+	})
+	scheme := "https://"
+	if oerr == nil {
+		scheme = schemeOf(strings.TrimSpace(out))
+	}
+	auth := authGitArgs(scheme, token)
 	steps := [][]string{
-		{"git", "-C", dir, "fetch", "--depth", "1", "origin", prRefspec(key.Platform, key.Number)},
+		append(append([]string{"git"}, auth...), "-C", dir, "fetch", "--depth", "1", "origin", prRefspec(key.Platform, key.Number)),
 		{"git", "-C", dir, "checkout", "--force", "FETCH_HEAD"},
 	}
 	for _, args := range steps {

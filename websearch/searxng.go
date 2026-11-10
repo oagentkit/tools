@@ -86,8 +86,11 @@ func (s *Searxng) Search(ctx context.Context, query string, topK int) ([]Result,
 }
 
 // searchIn web_search 工具入参（utils.InferTool 自动推导 schema）。
+// ⚠️ jsonschema 标签必须用 `description=...` 键值形态（tools#128）：eino 的
+// 标签解析按 `key=value` 切分，无 `=` 的裸标签**整条静默丢弃**——此前裸串
+// 形态让「用领域/技术术语」这条调用指引从未到达模型，装配零报错。
 type searchIn struct {
-	Query string `json:"query" jsonschema:"检索 query，用领域/技术术语（可中英文）"`
+	Query string `json:"query" jsonschema:"description=检索 query，用领域/技术术语（可中英文）"`
 }
 
 // AsTool 把检索包成 web_search 内置工具（与 rag.AsTool 同形态）。
@@ -135,6 +138,16 @@ func (s *Searxng) AsTool() tool.BaseTool {
 		})
 	if err != nil {
 		panic(fmt.Sprintf("searxng: 构建 web_search 工具失败: %v", err)) // panic 契约见 AsTool doc（rag#31 同族对齐）
+	}
+	// 构造期守卫（tools#128）：query 参数的 description 必须真的进了 schema。
+	// eino jsonschema 对无 `=` 的裸标签**整条静默丢弃**（同族静默失效编译期
+	// 不可见）——守卫把它变成构造期 panic，与本函数 panic 契约同族。
+	if info, ierr := t.Info(context.Background()); ierr == nil && info != nil && info.ParamsOneOf != nil {
+		if js, jerr := info.ParamsOneOf.ToJSONSchema(); jerr == nil && js != nil && js.Properties != nil {
+			if q, ok := js.Properties.Get("query"); !ok || q == nil || q.Description == "" {
+				panic("searxng: searchIn.Query 的 jsonschema description 未进 schema——无 `=` 的裸标签被 eino 静默丢弃，须用 `description=...` 键值形态（tools#128）")
+			}
+		}
 	}
 	return t
 }

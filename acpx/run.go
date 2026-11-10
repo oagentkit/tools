@@ -173,7 +173,10 @@ type envelopeOut struct {
 }
 
 // envelopeErrMsg 信封错误文案提取：null/空 = 无失败；字符串直取；
-// 对象取 message；其余形态回退原文。
+// 对象取 message（无 message 键或为空 → 回退原文——tools#127：任何 JSON
+// 对象 Unmarshal 进单字段 struct 都成功，「其余形态回退原文」曾对对象形态
+// 结构性不可达，{"code":500,"msg":"..."} 这类 message 键名不同的信封被吞成
+// 无失败，错误经全文兜底变成「成功」的垃圾正文）。
 func envelopeErrMsg(raw json.RawMessage) string {
 	s := strings.TrimSpace(string(raw))
 	if s == "" || s == "null" {
@@ -187,7 +190,10 @@ func envelopeErrMsg(raw json.RawMessage) string {
 		Message string `json:"message"`
 	}
 	if err := json.Unmarshal(raw, &obj); err == nil {
-		return strings.TrimSpace(obj.Message)
+		if msg := strings.TrimSpace(obj.Message); msg != "" {
+			return msg
+		}
+		return s // 对象但无 message 键/为空：回退原文（原文非空，失败可见）
 	}
 	return s
 }
