@@ -6,13 +6,15 @@ toolchain go1.27.2
 
 require (
 	github.com/cloudwego/eino v0.9.21
-	github.com/oagentkit/guardx v0.24.1
-	github.com/oagentkit/runtime v0.12.6
-	github.com/oagentkit/textx v0.10.7
+	github.com/oagentkit/guardx v0.24.2
+	github.com/oagentkit/runtime v0.12.7
+	github.com/oagentkit/textx v0.10.8
 	github.com/oekit/concurrency v0.33.0
 	github.com/oekit/logx v0.9.2
 	github.com/oekit/pkg v0.43.0
 )
+
+require github.com/mattn/go-isatty v0.0.20 // indirect
 
 require (
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
