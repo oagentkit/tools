@@ -22,6 +22,8 @@
 测试按 issue 号命名新增 5 条回归用例 + bgjob marker 计数断言更新（rm -f
 + echo $? 各一次）；全仓 go test -count=1 全绿。
 
+- 杂务(deps)：依赖地板追到最新——github.com/oekit/pkg v0.44.0
+
 ## [v0.14.4] — 2026-11-11
 
 ### 修复(workcopy,bashguard,acpx,websearch)：五单清零——token 不落盘、模板任务载体哨兵、信封对象回退、schema 描述守卫（#124-#128）
