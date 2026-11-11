@@ -167,9 +167,14 @@ func (j *Job) Cleanup() (removed bool, err error) {
 }
 
 // startCommand 组启动命令（结构即协议，见 Start）。
+// 启动链先 rm -f 上一轮残留的 marker（tools#135）：marker 是终态唯一凭证，
+// 同路径复用 OutputPath（固定日志路径是常态）时旧 marker 让新任务被探测
+// 立即判 FINISHED（旧退出码）、Cleanup 把仍在写的输出当终态删掉——
+// 「新任务的 marker 只能由新任务的 wrapper 写出」由此保证。
 func startCommand(cmd, outPath, markerPath string) string {
 	inner := "sh -c " + shellQuote(cmd) + "; echo $? > " + shellQuote(markerPath)
 	return "umask 077 && mkdir -p " + shellQuote(filepath.Dir(outPath)) +
+		" && rm -f " + shellQuote(markerPath) +
 		" && : > " + shellQuote(outPath) +
 		" && { setsid nohup sh -c " + shellQuote(inner) +
 		" > " + shellQuote(outPath) + " 2>&1 </dev/null & }"

@@ -225,8 +225,13 @@ func TestCommandShapesQuotePathsVerbatim(t *testing.T) {
 	if !strings.Contains(start, "; echo $? > ") {
 		t.Errorf("启动命令应由外层写 marker（echo $? 在用户命令之外）: %s", start)
 	}
-	if got := strings.Count(start, "out.log.rc"); got != 1 {
-		t.Errorf("启动命令 marker 应恰好出现一次（got %d）: %s", got, start)
+	// tools#135 起启动链先 rm -f 上一轮残留 marker（防同路径复用误报 FINISHED）
+	// ——marker 路径出现两次（rm -f 一次 + echo $? 写一次）是预期形态。
+	if got := strings.Count(start, "out.log.rc"); got != 2 {
+		t.Errorf("启动命令 marker 应出现两次（rm -f 清陈旧 + echo $? 写终态，got %d）: %s", got, start)
+	}
+	if !strings.Contains(start, "rm -f ") {
+		t.Errorf("启动命令应先清陈旧 marker（tools#135）: %s", start)
 	}
 	if strings.Contains(start, "out.log.rc.rc") {
 		t.Errorf("启动命令 marker 被二次拼接（p.rc.rc 活虫形态）: %s", start)

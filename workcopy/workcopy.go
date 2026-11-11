@@ -335,6 +335,19 @@ func (p *Pool) prepare(ctx context.Context, key WorktreeKey, baseURL, token stri
 	if err != nil {
 		return "", fmt.Errorf("workcopy: 建沙箱失败: %w", err)
 	}
+	// 在飞保护（tools#136，tools#108 的另一半）：prepare 的 wc-* 目录从建出
+	// 到注册 entries 之间（clone/fetch/checkout 至多 3×5min）既不在 entries
+	// 也不在 inflight——TTL 小于一次慢克隆时 Sweep 的孤儿扫描会把它当泄漏
+	// 目录删掉（clone 只写 .git/ 子目录，顶层 mtime 停在起点，ModTime 兜底
+	// 判不出「正在建」）。登记 inflight，失败/成功两路都注销（defer 原子收口）。
+	p.mu.Lock()
+	p.inflight[dir] = true
+	p.mu.Unlock()
+	defer func() {
+		p.mu.Lock()
+		delete(p.inflight, dir)
+		p.mu.Unlock()
+	}()
 	branch := key.DefaultBranch
 	if branch == "" {
 		branch = "main"
