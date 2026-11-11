@@ -22,6 +22,7 @@
 测试按 issue 号命名新增 5 条回归用例 + bgjob marker 计数断言更新（rm -f
 + echo $? 各一次）；全仓 go test -count=1 全绿。
 
+- 杂务(deps)：依赖地板追到最新——guardx v0.24.3 / textx v0.10.9
 - 杂务(deps)：依赖地板追到最新——github.com/oekit/pkg v0.44.0
 
 ## [v0.14.4] — 2026-11-11
