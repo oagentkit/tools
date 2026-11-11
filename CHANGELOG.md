@@ -2,6 +2,26 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.14.5] — 2026-11-11
+
+### 修复(bashguard,bgjob,workcopy,acpx)：六单清零——绝对路径内核、兜底丢旗、shell 文本派发器、陈旧 marker、在飞保护、qwen 归因（#132 #133 #134 #135 #136 #137）
+
+- #132 destructiveRule 单源 basename 归一：/bin/rm、/usr/bin/mkfs.ext4、./rm
+  在顶层/剥壳后/find 载荷的绝对路径内核全部命中规则（1dbd1bd 只护了
+  innerKernelVerdict 段首）——RiskWrite「直接跑」档不再收留不可逆命令
+- #133 destructiveByRule 兜底递归传子命令之后的全部 token（此前 nil）——
+  git 未登记全局旗退兜底后 --hard 判据不再失明
+- #134 不可逆表登记 sh/bash/zsh/dash/ksh（-c 值）与 eval（操作数）为
+  shell 文本派发器：InnerOperandShellText 新定位形态，bash -c 'rm -rf /'
+  与 eval 同判 su -c
+- #135 bgjob 启动链先 rm -f 陈旧 marker——同路径复用 OutputPath 不再被
+  旧终态误报 FINISHED、Cleanup 不再删仍在写的输出
+- #136 workcopy prepare 的 wc-* 目录登记 inflight（tools#108 的另一半）：
+  clone 至多 3×5min 的在飞窗口不再被 Sweep 孤儿扫描删掉；defer 原子收口
+- #137 acpx gemini 适配器错误文案取 g.name——qwen 的失败不再归因到 gemini
+测试按 issue 号命名新增 5 条回归用例 + bgjob marker 计数断言更新（rm -f
++ echo $? 各一次）；全仓 go test -count=1 全绿。
+
 ## [v0.14.4] — 2026-11-11
 
 ### 修复(workcopy,bashguard,acpx,websearch)：五单清零——token 不落盘、模板任务载体哨兵、信封对象回退、schema 描述守卫（#124-#128）
