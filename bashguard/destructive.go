@@ -289,6 +289,15 @@ func (t *Table) innerCmdScan(name, sub string, argv []string, rules []InnerCmdRu
 			}
 			continue
 		}
+		if r.Loc == InnerOperandShellText {
+			// 首个裸操作数的值是 shell 文本（tools#134：eval 'rm -rf /'）。
+			if val, ok := firstOperand(argv); ok {
+				if d := Analyze(val, t); d.Destructive {
+					return true, fmt.Sprintf("%s 的操作数内层不可逆：%s", prefix, d.DestructiveReason)
+				}
+			}
+			continue
+		}
 		if ok, why := t.innerKernelVerdict(locateInner(argv, r)); ok {
 			return true, fmt.Sprintf("%s 的内层内核不可逆：%s", prefix, why)
 		}
@@ -325,6 +334,21 @@ func skipFlagAndOperand(argv []string, skip int) []string {
 		i++
 	}
 	return argv[i:]
+}
+
+// firstOperand 首个非 flag 裸操作数（tools#134：eval 的命令文本载体；
+// 值归属不猜——flag 后跟的 token 不算操作数，与 skipFlagAndOperand 同口径）。
+func firstOperand(argv []string) (string, bool) {
+	for i, a := range argv {
+		if strings.HasPrefix(a, "-") {
+			continue
+		}
+		if i > 0 && strings.HasPrefix(argv[i-1], "-") {
+			continue // 前一个 token 是 flag：本 token 可能是它的值（保守跳过）
+		}
+		return a, true
+	}
+	return "", false
 }
 
 // innerFlagValue 定位承载命令文本的旗标值：独立参数（-c VALUE）、内联长旗
@@ -394,10 +418,25 @@ func expandEnvSplitString(argv []string) []string {
 
 // destructiveRule 查不可逆规则：先精确命中，再前缀族（"mkfs*" 覆盖 mkfs.ext4 等）。
 //
+// basename 归一（tools#132）：规则表的键是裸命令名（rm / mkfs*），调用方的
+// 命令 token 可能是绝对路径（/bin/rm、/usr/bin/mkfs.ext4）——1dbd1bd 只在
+// innerKernelVerdict 段首做了归一，顶层/剥壳后/find 载荷的绝对路径内核一律
+// 查不到规则。归一收口到本函数单源（innerKernelVerdict 的 path.Base 保留
+// 无害，本函数再兜一次）；相对路径 ./rm 同样折算。
+//
 // 前缀族命中多个时取**最长前缀**（确定性：map 遍历序随机，不能让判定随遍历序变）。
 func (t *Table) destructiveRule(name string) (Policy, bool) {
 	if rule, ok := t.Destructive[name]; ok {
 		return rule, true
+	}
+	if base := path.Base(name); base != name {
+		if rule, ok := t.Destructive[base]; ok {
+			return rule, true
+		}
+		// 前缀族对 basename 再试（/usr/bin/mkfs.ext4 → mkfs*）。
+		if rule, ok := t.destructiveRule(base); ok {
+			return rule, true
+		}
 	}
 	best, bestLen := Policy{}, -1
 	for key, rule := range t.Destructive {
@@ -432,12 +471,18 @@ func destructiveByRule(name string, argv []string, rule Policy) (bool, string) {
 		// 兜底：本层 flag 不在表里 → 定位不了子命令。安全方向是**多报**而不是漏报，
 		// 于是退一步扫全部非 flag token（可能把同名实参当成子命令 ⇒ 假阳性，
 		// 但假阳性的代价只是多要一次确认，假阴性的代价是命令真跑了）。
-		for _, tok := range argv {
+		// 递归传**子命令之后的全部 token**（tools#133）：传 nil 曾把 flag 判据
+		// 全丢——`git --no-literal-pathspecs reset --hard` 的 --hard 在兜底递归
+		// 里被丢掉，reset{--hard} 判据失明。（tok 之后的 token 才是子命令的
+		// argv；tok 之前的本层旗对子命令无意义，与正路 splitSubcommand 的 rest
+		// 同一语义。）
+		for i, tok := range argv {
 			if strings.HasPrefix(tok, "-") {
 				continue
 			}
 			if subRule, ok := rule.Subcommands[tok]; ok {
-				return destructiveByRule(name+" "+tok, nil, subRule)
+				rest := append([]string{}, argv[i+1:]...)
+				return destructiveByRule(name+" "+tok, rest, subRule)
 			}
 		}
 	}

@@ -69,6 +69,10 @@ const (
 	// InnerFlagValue 旗标的**值**按 shell 文本再判一次（su -c 'rm -rf /data'：
 	// 值本身就是命令行，argv 定位取不到）。旗标名单在 InnerCmdRule.Flags。
 	InnerFlagValue InnerCmdLoc = "flag-value"
+	// InnerOperandShellText 首个非 flag 裸操作数的**值**按 shell 文本再判一次
+	//（tools#134：eval 'rm -rf /' 的操作数就是命令行——与 InnerFirstOperand
+	// 的「段定位→kernelScan」不同，单 token 文本里的内核要 Analyze 才可见）。
+	InnerOperandShellText InnerCmdLoc = "operand-shell-text"
 )
 
 // InnerCmdRule 单条内层命令定位规则（tools#117）。

@@ -278,6 +278,16 @@ func defaultDestructive() map[string]Policy {
 		}},
 		// systemd-run：瞬态服务里跑的内核 = 首个裸操作数起的整段
 		"systemd-run": {InnerCmd: []InnerCmdRule{{Loc: InnerFirstOperand}}},
+		// shell 文本派发器（tools#134）：-c 的值/eval 的操作数本身就是命令行
+		//（bash -c 'rm -rf /' 的 argv 是 ["-c","rm -rf /"]，kernelScan 只见
+		// 整串查表不命中）——旗标值/操作数按 shell 文本走 Analyze 再判，
+		// 与 su -c 同机制。五族 POSIX shell 全登记。
+		"sh":   {InnerCmd: []InnerCmdRule{{Loc: InnerFlagValue, Flags: []string{"-c"}}}},
+		"bash": {InnerCmd: []InnerCmdRule{{Loc: InnerFlagValue, Flags: []string{"-c"}}}},
+		"zsh":  {InnerCmd: []InnerCmdRule{{Loc: InnerFlagValue, Flags: []string{"-c"}}}},
+		"dash": {InnerCmd: []InnerCmdRule{{Loc: InnerFlagValue, Flags: []string{"-c"}}}},
+		"ksh":  {InnerCmd: []InnerCmdRule{{Loc: InnerFlagValue, Flags: []string{"-c"}}}},
+		"eval": {InnerCmd: []InnerCmdRule{{Loc: InnerOperandShellText}}},
 		// 清日志：--vacuum-* 把旧日志真删掉
 		"journalctl": {DestructiveFlags: []string{"--vacuum-time", "--vacuum-size", "--vacuum-files"}},
 		// find 批量删除（tools#107）：-delete 是批量不可逆删除；-exec/-execdir/

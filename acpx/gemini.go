@@ -64,8 +64,10 @@ type geminiOut struct {
 // 截断（8MB 上限）⇒ JSON 必然残缺/留痕混入——截断残片连同尾注曾被全文兜底
 // 当成功的最终回答返回（token 账单按 8MB 走、内容全是垃圾、提示混在答案里
 // 而不是走 error 通道）。
-func geminiTruncatedErr() error {
-	return fmt.Errorf("acpx: %s stdout 触发截断上限——单对象 JSON 已残缺，拒绝把截断残片当最终回答兜底（tools#94/#110）", "gemini")
+func geminiTruncatedErr(name string) error {
+	// name 用调用方 g.name（tools#137）：适配器被 qwen 复用，硬写 "gemini"
+	// 让 qwen 的失败在日志/告警里归因到 gemini 名下。
+	return fmt.Errorf("acpx: %s stdout 触发截断上限——单对象 JSON 已残缺，拒绝把截断残片当最终回答兜底（tools#94/#110）", name)
 }
 
 // Run 执行 Gemini CLI 非交互任务。
@@ -91,11 +93,11 @@ func (g *Gemini) Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 		//   - error 信封在场（主解析的失败常是其它字段形态漂移）⇒ 如实报错；
 		//   - 两者皆无才允许全文兜底（非 JSON 输出：版本差异/日志混入）。
 		if stdoutTruncated(stdout) {
-			return nil, geminiTruncatedErr()
+			return nil, geminiTruncatedErr(g.name)
 		}
 		if msg := envelopeFallbackErrMsg(stdout); msg != "" {
 			emitError(req, msg, stdout)
-			return nil, streamError("gemini", "运行错误", msg)
+			return nil, streamError(g.name, "运行错误", msg)
 		}
 		return fallbackResult(stdout, stderr, code), nil
 	}
@@ -108,13 +110,13 @@ func (g *Gemini) Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 			msg = strings.TrimSpace(string(out.Error))
 		}
 		emitError(req, msg, stdout)
-		return nil, streamError("gemini", "运行错误", msg)
+		return nil, streamError(g.name, "运行错误", msg)
 	}
 	if out.Response == "" {
 		// 空响应兜底同样过截断守门（tools#110）：截断形态下「解析成功但响应
 		// 为空」的残stdout 兜底会把截断留痕混进答案
 		if stdoutTruncated(stdout) {
-			return nil, geminiTruncatedErr()
+			return nil, geminiTruncatedErr(g.name)
 		}
 		return fallbackResult(stdout, stderr, code), nil
 	}
