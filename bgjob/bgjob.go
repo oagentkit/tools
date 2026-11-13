@@ -1,10 +1,13 @@
 package bgjob
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
+
+	"github.com/oekit/pkg/stringx"
 )
 
 // Session 宿主既有 SSH 会话的最小收窄（tools#106）：bgjob 只需要「跑一条
@@ -42,8 +45,11 @@ type Job struct {
 	// OutputPath 输出文件（远端绝对路径，调用方经 WithOutputPath 给定）：
 	// 任务的 stdout/stderr 落此文件。
 	OutputPath string
-	// MarkerPath 退出码 marker = OutputPath + ".rc"（Go 侧单源一次算定，
-	// 契约见 doc.go 第 3 条）。
+	// MarkerPath 退出码 marker = OutputPath + ".rc." + 任务身份（Go 侧单源
+	// 一次算定，契约见 doc.go 第 3 条）。身份每次 Start 唯一（tools#161）：
+	// 同路径复用时上一轮**在飞**任务的 wrapper 在新 Start 之后才写回，固定
+	// 路径下旧退出码会落成新任务的终态凭证——身份分开后旧写回落旧路径，
+	// 本任务的探测/清理只认自己的路径。
 	MarkerPath string
 
 	sess Session
@@ -57,8 +63,9 @@ type startConfig struct {
 }
 
 // WithOutputPath 指定远端输出文件路径（**必填**、远端绝对路径）：任务的
-// stdout/stderr 落此文件，退出码 marker 固定为其 + ".rc"。输出重定向由调用方
-// 给——本原语不做日志轮转、不替调用方选路径（提案边界声明）。
+// stdout/stderr 落此文件，退出码 marker 为其 + ".rc." + 本次任务身份
+// （markerPathOf 单源，tools#161）。输出重定向由调用方给——本原语不做
+// 日志轮转、不替调用方选路径（提案边界声明）。
 func WithOutputPath(path string) StartOption {
 	return func(c *startConfig) { c.outputPath = path }
 }
@@ -102,7 +109,7 @@ func Start(sess Session, cmd string, opts ...StartOption) (*Job, error) {
 	if !filepath.IsAbs(cfg.outputPath) {
 		return nil, fmt.Errorf("bgjob: 输出路径须为远端绝对路径: %q", cfg.outputPath)
 	}
-	job := &Job{OutputPath: cfg.outputPath, MarkerPath: cfg.outputPath + ".rc", sess: sess}
+	job := &Job{OutputPath: cfg.outputPath, MarkerPath: markerPathOf(cfg.outputPath), sess: sess}
 	out, code, err := sess.Exec(startCommand(cmd, job.OutputPath, job.MarkerPath))
 	if err != nil {
 		return nil, fmt.Errorf("bgjob: 启动失败: %w", err)
@@ -169,8 +176,12 @@ func (j *Job) Cleanup() (removed bool, err error) {
 // startCommand 组启动命令（结构即协议，见 Start）。
 // 启动链先 rm -f 上一轮残留的 marker（tools#135）：marker 是终态唯一凭证，
 // 同路径复用 OutputPath（固定日志路径是常态）时旧 marker 让新任务被探测
-// 立即判 FINISHED（旧退出码）、Cleanup 把仍在写的输出当终态删掉——
-// 「新任务的 marker 只能由新任务的 wrapper 写出」由此保证。
+// 立即判 FINISHED（旧退出码）、Cleanup 把仍在写的输出当终态删掉。
+// rm -f 只能清 Start 时刻**已落盘**的形态：上一轮任务还在飞时，旧 wrapper 的
+// `echo $? > MARKER` 在新 Start 之后才执行，固定路径下照样把旧退出码写成新
+// 任务的终态凭证——「新任务的 marker 只能由新任务的 wrapper 写出」由此保证
+// 靠的是 marker 路径带任务身份（markerPathOf，tools#161），rm -f 是身份
+// 碰撞与跨版本残留的纵深。
 func startCommand(cmd, outPath, markerPath string) string {
 	inner := "sh -c " + shellQuote(cmd) + "; echo $? > " + shellQuote(markerPath)
 	return "umask 077 && mkdir -p " + shellQuote(filepath.Dir(outPath)) +
@@ -178,6 +189,15 @@ func startCommand(cmd, outPath, markerPath string) string {
 		" && : > " + shellQuote(outPath) +
 		" && { setsid nohup sh -c " + shellQuote(inner) +
 		" > " + shellQuote(outPath) + " 2>&1 </dev/null & }"
+}
+
+// markerPathOf marker 路径单源（doc.go 契约 3）：输出路径 + ".rc." + 本次
+// Start 的任务身份（crypto/rand 文本 ≥128 位，跨进程/跨会话碰撞可忽略）。
+// 身份进文件名是 tools#161 的修法：在飞旧任务的写回落旧路径，新任务的
+// 探测/清理只认自己的路径——固定路径下旧 wrapper 的迟到写回会被新任务
+// 认领为终态（误报 FINISHED + Cleanup 删仍在写的输出）。
+func markerPathOf(outputPath string) string {
+	return outputPath + ".rc." + rand.Text()
 }
 
 // probeCommand 组探测命令：marker 在场 = 终态（printf 前缀 + cat 拼一行，
@@ -224,10 +244,14 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
 }
 
-// snap 错误信息里的输出快照（防超长噪音进错误文本）。
+// snap 错误信息里的输出快照（防超长噪音进错误文本）。截断走矩阵同款
+// stringx.TruncBytes（tools#165）：按字节切片曾把多字节字符劈半，中文输出
+// >200 字节后尾部必现 U+FFFD——预算仍是 200 字节，落点回退到 rune 边界。
 func snap(s string) string {
-	if len(s) > 200 {
-		return s[:200] + "…"
+	const snapBudget = 200
+	out, truncated := stringx.TruncBytes(s, snapBudget)
+	if truncated {
+		return out + "…"
 	}
-	return s
+	return out
 }

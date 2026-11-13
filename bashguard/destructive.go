@@ -290,9 +290,13 @@ func (t *Table) innerCmdScan(name, sub string, argv []string, rules []InnerCmdRu
 			continue
 		}
 		if r.Loc == InnerOperandShellText {
-			// 首个裸操作数的值是 shell 文本（tools#134：eval 'rm -rf /'）。
-			if val, ok := firstOperand(argv); ok {
-				if d := Analyze(val, t); d.Destructive {
+			// 操作数**整体**是 shell 文本（tools#134：eval 'rm -rf /'；
+			// tools#158：POSIX eval 把全部参数用空格拼接后整体求值——
+			// eval a b c ≡ eval "a b c"）。只取首个操作数时 `eval rm -rf /`
+			// 的 -rf / 被当 flag 丢掉，拼接后的完整命令行从未被评估；eval
+			// 自身无旗标，内层的 -rf 恰恰是命令文本的组成部分。
+			if len(argv) > 0 {
+				if d := Analyze(strings.Join(argv, " "), t); d.Destructive {
 					return true, fmt.Sprintf("%s 的操作数内层不可逆：%s", prefix, d.DestructiveReason)
 				}
 			}
@@ -336,23 +340,10 @@ func skipFlagAndOperand(argv []string, skip int) []string {
 	return argv[i:]
 }
 
-// firstOperand 首个非 flag 裸操作数（tools#134：eval 的命令文本载体；
-// 值归属不猜——flag 后跟的 token 不算操作数，与 skipFlagAndOperand 同口径）。
-func firstOperand(argv []string) (string, bool) {
-	for i, a := range argv {
-		if strings.HasPrefix(a, "-") {
-			continue
-		}
-		if i > 0 && strings.HasPrefix(argv[i-1], "-") {
-			continue // 前一个 token 是 flag：本 token 可能是它的值（保守跳过）
-		}
-		return a, true
-	}
-	return "", false
-}
-
 // innerFlagValue 定位承载命令文本的旗标值：独立参数（-c VALUE）、内联长旗
-// （--command=VALUE）与联合短旗（-cVALUE）三形态。
+// （--command=VALUE）、联合短旗内联（-cVALUE）与联合短旗内嵌（-lc VALUE，
+// tools#159——`bash -lc 'rm -rf /'` 按 POSIX 即 -l -c，-c 的值同样是命令行；
+// 只认 -c 打头拼写曾让 #134 的绕过形态在最常用变体下原样存活）四形态。
 func innerFlagValue(argv []string, flags []string) (val, flag string, ok bool) {
 	for i, a := range argv {
 		for _, f := range flags {
@@ -367,6 +358,21 @@ func innerFlagValue(argv []string, flags []string) (val, flag string, ok bool) {
 				strings.HasPrefix(a, f) && len(a) > len(f) {
 				return a[len(f):], f, true
 			}
+			// 联合短旗内嵌：-lc/-ec 形态——c 不在 token 首位，按 getopt 语义
+			// 取 c 之后的剩余部分为值（无剩余则值为下一参数，-lc 'rm…' 的
+			// 载荷形态）。与只读侧 flagLookup 的联合短旗纪律同源：那边留着
+			// 「曾经的真实漏判面」注释，不可逆档不该重演同一形态。
+			if len(f) == 2 && f[0] == '-' && f[1] != '-' &&
+				strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") && len(a) > 2 {
+				if idx := strings.IndexByte(a[1:], f[1]); idx >= 0 {
+					if rest := a[idx+2:]; rest != "" {
+						return rest, f, true
+					}
+					if i+1 < len(argv) {
+						return argv[i+1], f, true
+					}
+				}
+			}
 		}
 	}
 	return "", "", false
@@ -374,8 +380,11 @@ func innerFlagValue(argv []string, flags []string) (val, flag string, ok bool) {
 
 // innerKernelVerdict 内层段的内核判定：段首可为绝对路径内核（chroot /host
 // /bin/rm、systemd-run /usr/bin/rm——kernelScan 只认裸命令名，/bin/rm 曾查
-// 不到规则整体放行），先按 basename 再查一次规则；其后仍交 kernelScan 全
-// token 扫描兜底（段内可再包调度器：docker exec web sudo rm -rf /data）。
+// 不到规则整体放行），先按 basename 再查一次规则；其后交 kernelScan 全
+// token 扫描兜底（段内可再包调度器：docker exec web sudo rm -rf /data）；
+// 仍不命中时整段按 shell 文本再判一次（tools#162：ssh host 'rm -rf /data'
+// 的内层以**单个含空格 token** 到达，kernelScan 逐词查表对整串不命中——
+// 与 InnerFlagValue 的 su -c 同机制，宿主自建规则在文本里同样生效）。
 func (t *Table) innerKernelVerdict(inner []string) (bool, string) {
 	if len(inner) == 0 {
 		return false, ""
@@ -385,7 +394,13 @@ func (t *Table) innerKernelVerdict(inner []string) (bool, string) {
 			return true, why
 		}
 	}
-	return t.kernelScan(inner)
+	if ok, why := t.kernelScan(inner); ok {
+		return true, why
+	}
+	if d := Analyze(strings.Join(inner, " "), t); d.Destructive {
+		return true, d.DestructiveReason
+	}
+	return false, ""
 }
 
 // expandEnvSplitString 把 env 的 -S/--split-string 值原位展开成词序列

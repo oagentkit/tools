@@ -7,18 +7,13 @@ import "sync"
 // 缺省表预编译一次：defaultCommands 是百余行字面量 + 数十个小 map，原先
 // Analyze(t==nil) 每次都整表重建，纯属热路径浪费。模板只读共享；对外
 // DefaultTable 仍返回可安全改写的副本。
-var (
-	defaultTableOnce sync.Once
-	defaultTableTpl  *Table
-)
-
-// defaultTable 只读共享模板（调用方不得改写；仅供 Analyze 缺省路径）。
-func defaultTable() *Table {
-	defaultTableOnce.Do(func() {
-		defaultTableTpl = &Table{Commands: defaultCommands(), Destructive: defaultDestructive()}
-	})
-	return defaultTableTpl
-}
+//
+// defaultTable 只读共享模板（调用方不得改写；仅供 Analyze 缺省路径）——
+// sync.OnceValue 单源惰性构造（Go 1.21 起的惯用形态，零值 Once + 手写 Do
+// 的样板省掉）。
+var defaultTable = sync.OnceValue(func() *Table {
+	return &Table{Commands: defaultCommands(), Destructive: defaultDestructive()}
+})
 
 // DefaultTable 内置缺省策略表（副本：调用方改表不影响后续 DefaultTable）。
 func DefaultTable() *Table {
@@ -275,6 +270,17 @@ func defaultDestructive() map[string]Policy {
 		"su": {InnerCmd: []InnerCmdRule{
 			{Loc: InnerFlagValue, Flags: []string{"-c", "--command", "--session-command"}},
 			{Loc: InnerAfterOperand},
+		}},
+		// ssh 远程执行（tools#162）：内层命令在**远端** shell 执行，与裸命令
+		// 同效——`ssh host 'rm -rf /data'` 的内层以单个含空格 token 到达
+		//（innerKernelVerdict 的 shell 文本兜底接住，与 #134 给 su 的机制同款），
+		// 多词形态（ssh host rm -rf /data）走段内 kernelScan。此前 ssh 不在
+		// 任何表里，同族的 docker exec 判 true、ssh 判 false——只差表登记。
+		"ssh": {InnerCmd: []InnerCmdRule{{Loc: InnerAfterOperand}}},
+		// rsync --delete：按源删目标侧多出的文件（删掉就没了，tools#162 探针
+		// F4 同批形态）——与 rm 同纪律：带删除面的 flag 才算不可逆。
+		"rsync": {DestructiveFlags: []string{
+			"--delete", "--delete-before", "--delete-after", "--delete-excluded",
 		}},
 		// systemd-run：瞬态服务里跑的内核 = 首个裸操作数起的整段
 		"systemd-run": {InnerCmd: []InnerCmdRule{{Loc: InnerFirstOperand}}},

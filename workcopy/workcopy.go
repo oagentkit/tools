@@ -250,6 +250,22 @@ func (p *Pool) Release(key WorktreeKey) {
 	}
 }
 
+// EnsureMergeBase Pool 形态的历史补全（tools#160）：鉴权 token 取自
+// CredentialOf（与 prepare/refresh 同一凭证源），经 WithToken 注入 deepen
+// fetch 的进程级 `-c http.extraheader`——dir 为 Ensure 返回的已登记工作副本
+// 目录。CredentialOf 未配置/该平台无凭证时退化为无鉴权 deepen（公有远端照常
+// 可用，不复刻 Ensure 的「缺凭证即报错」——clone 必须凭证，deepen 未必）。
+func (p *Pool) EnsureMergeBase(ctx context.Context, dir string, key WorktreeKey, baseBranch string, timeout time.Duration, opts ...DeepenOption) error {
+	var token string
+	if p.CredentialOf != nil {
+		if _, tok, ok := p.CredentialOf(key.Platform); ok {
+			token = tok
+		}
+	}
+	return EnsureMergeBase(ctx, dir, baseBranch, timeout,
+		append([]DeepenOption{WithToken(token)}, opts...)...)
+}
+
 func prRefspec(platform, number string) string {
 	switch strings.ToLower(platform) {
 	case "gitlab":
