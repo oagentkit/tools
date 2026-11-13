@@ -69,9 +69,12 @@ const (
 	// InnerFlagValue 旗标的**值**按 shell 文本再判一次（su -c 'rm -rf /data'：
 	// 值本身就是命令行，argv 定位取不到）。旗标名单在 InnerCmdRule.Flags。
 	InnerFlagValue InnerCmdLoc = "flag-value"
-	// InnerOperandShellText 首个非 flag 裸操作数的**值**按 shell 文本再判一次
-	//（tools#134：eval 'rm -rf /' 的操作数就是命令行——与 InnerFirstOperand
-	// 的「段定位→kernelScan」不同，单 token 文本里的内核要 Analyze 才可见）。
+	// InnerOperandShellText 操作数**整体**按 shell 文本再判一次（tools#134：
+	// eval 'rm -rf /' 的操作数就是命令行——与 InnerFirstOperand 的「段定位→
+	// kernelScan」不同，单 token 文本里的内核要 Analyze 才可见）。POSIX eval
+	// 把全部参数用空格拼接后整体求值（eval a b c ≡ eval "a b c"），tools#158
+	// 起取 argv 全词拼接——只取首个操作数曾让 `eval rm -rf /` 的 -rf / 整体
+	// 丢掉，拼接后的完整命令行从未被评估。
 	InnerOperandShellText InnerCmdLoc = "operand-shell-text"
 )
 

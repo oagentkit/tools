@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/oagentkit/guardx/logredact"
@@ -47,6 +48,37 @@ type DeepenOptions struct {
 	MaxRounds int
 	// ProbeTimeout 单轮 merge-base 探测超时（缺省 30s）。
 	ProbeTimeout time.Duration
+	// Token deepen fetch 的鉴权 token（tools#160）：经进程级
+	// `-c http.extraheader` 注入（authGitArgs 同款，不落 .git/config）——
+	// tools#124 把 clone/PR fetch/refresh 三条路径改成无凭证 URL 后，deepen
+	// 是唯一没注入凭证的 fetch，而 config 里的 origin URL 已按契约恒为无凭证
+	// 形态：私有远端浅克隆加深必 401，EnsureMergeBase 每次报错降级、range
+	// 审查必然丢失。调用方从 Pool.CredentialOf 解析后经 WithToken 传入（与
+	// prepare/refresh 同一凭证源）。零值 = 无鉴权面（公有远端 / file:// fixture）。
+	Token string
+}
+
+// DeepenOption EnsureMergeBase/EnsureMergeBaseTLS 的可选项（XxxOption 命名
+// 纪律，AGENTS.md）：对 DeepenOptions 的函数式补充；EnsureMergeBaseOpts
+// 直接吃 DeepenOptions 结构体，不重复本形态。
+type DeepenOption func(*DeepenOptions)
+
+// WithToken 深度补全的鉴权 token（tools#160）：deepen fetch 经进程级
+// `-c http.extraheader` 注入 Basic 凭证（token 不进 URL、不落 .git/config，
+// 与包头承诺一致）。
+func WithToken(token string) DeepenOption {
+	return func(o *DeepenOptions) { o.Token = token }
+}
+
+// applyDeepenOpts 折叠可选项（nil 项跳过，容忍误传）。
+func applyDeepenOpts(opts []DeepenOption) DeepenOptions {
+	var o DeepenOptions
+	for _, fn := range opts {
+		if fn != nil {
+			fn(&o)
+		}
+	}
+	return o
 }
 
 func (o DeepenOptions) startDepth() int {
@@ -78,22 +110,24 @@ func (o DeepenOptions) probeTimeout() time.Duration {
 //     跳过"语义一致；
 //   - 加深轮失败/预算耗尽仍不可达 → 报错降级。整条消息过 logredact（git 传输
 //     失败回显带凭证 clone URL——ocrshim 通道此错误经 MCP 原样回传 argus）。
-func EnsureMergeBase(ctx context.Context, dir, baseBranch string, timeout time.Duration) error {
-	return ensureMergeBase(ctx, dir, baseBranch, timeout, false, DeepenOptions{})
+//
+// 私有远端经可选项 WithToken 注入鉴权（tools#160）。
+func EnsureMergeBase(ctx context.Context, dir, baseBranch string, timeout time.Duration, opts ...DeepenOption) error {
+	return ensureMergeBase(ctx, dir, baseBranch, timeout, false, applyDeepenOpts(opts))
 }
 
 // EnsureMergeBaseTLS EnsureMergeBase 的 TLS 形态：insecureTLS=true 时对 deepen
 // fetch 注入 GIT_SSL_NO_VERIFY（与 Pool.runGit 同款纪律——自签 https 平台的
 // clone/PR fetch 均走该环境，deepen fetch 漏注会让补全在此类平台确定性失败
 // 且静默降级丢失 range 审查；第八轮审计 C 级修复）。
-func EnsureMergeBaseTLS(ctx context.Context, dir, baseBranch string, timeout time.Duration, insecureTLS bool) error {
-	return ensureMergeBase(ctx, dir, baseBranch, timeout, insecureTLS, DeepenOptions{})
+func EnsureMergeBaseTLS(ctx context.Context, dir, baseBranch string, timeout time.Duration, insecureTLS bool, opts ...DeepenOption) error {
+	return ensureMergeBase(ctx, dir, baseBranch, timeout, insecureTLS, applyDeepenOpts(opts))
 }
 
 // EnsureMergeBaseOpts EnsureMergeBase 的参数化形态（oagentkit/tools#36）：
 // DeepenOptions 调起步层数/轮数上限/单轮探测超时——单体大仓放宽（万级提交
 // 8 轮可能不够）、CI 资源紧张的宿主收紧；零值字段取包级缺省。整体时间预算
-// 仍由 timeout 统一兜底。
+// 仍由 timeout 统一兜底。鉴权 token 同在 DeepenOptions.Token（tools#160）。
 func EnsureMergeBaseOpts(ctx context.Context, dir, baseBranch string, timeout time.Duration, opts DeepenOptions) error {
 	return ensureMergeBase(ctx, dir, baseBranch, timeout, false, opts)
 }
@@ -114,17 +148,31 @@ func ensureMergeBase(ctx context.Context, dir, baseBranch string, timeout time.D
 	if _, err := os.Stat(filepath.Join(dir, ".git", "shallow")); err != nil {
 		return nil // 完整克隆：merge-base 失败非浅历史问题
 	}
+	// 鉴权参数（tools#160）：#124 把三条 git 远程命令中的两条改成进程级注入后，
+	// deepen 是唯一漏注的一条——config 的 origin URL 此时已按契约改成无凭证
+	// 形态，deepen 拿不到任何凭证，私有远端必 401。scheme 从 origin URL 反推
+	//（refresh 同款——file:// fixture 无鉴权面，authGitArgs 返回 nil）；无
+	// token 时不发额外 git 调用，公有远端路径零开销。
+	var auth []string
+	if opts.Token != "" {
+		scheme := "https://"
+		if out, _, _, err := procx.Run(ctx, procx.RunRequest{
+			Argv: []string{"git", "-C", dir, "remote", "get-url", "origin"}, Timeout: 10 * time.Second,
+		}); err == nil {
+			scheme = schemeOf(strings.TrimSpace(out))
+		}
+		auth = authGitArgs(scheme, opts.Token)
+	}
 	for i := 0; i < opts.maxRounds(); i++ {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			break
 		}
 		fetchReq := procx.RunRequest{
-			Argv: []string{
-				"git", "-C", dir, "fetch",
-				"--deepen=" + strconv.Itoa(opts.startDepth()<<i),
-				"origin", fullRefspec,
-			},
+			Argv: append(append([]string{"git"}, auth...),
+				"-C", dir, "fetch",
+				"--deepen="+strconv.Itoa(opts.startDepth()<<i),
+				"origin", fullRefspec),
 			Timeout: remaining,
 		}
 		if insecureTLS {

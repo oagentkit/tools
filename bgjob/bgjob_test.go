@@ -82,7 +82,7 @@ func waitState(t *testing.T, j *Job, want State) string {
 }
 
 // TestStartExitCodeViaMarker 契约 1/2 的验收样例：任务 `exit 3` → Status 报
-// finished/3，marker 文件 = 输出路径 + ".rc"。
+// finished/3，marker 文件 = 输出路径 + ".rc." + 任务身份（tools#161）。
 func TestStartExitCodeViaMarker(t *testing.T) {
 	setsidShim(t)
 	out := filepath.Join(t.TempDir(), "out.log")
@@ -96,8 +96,11 @@ func TestStartExitCodeViaMarker(t *testing.T) {
 	if _, err := os.Stat(out); err != nil {
 		t.Fatalf("输出文件应在场: %v", err)
 	}
-	if _, err := os.Stat(out + ".rc"); err != nil {
-		t.Fatalf("marker 应为输出路径+.rc: %v", err)
+	if !strings.HasPrefix(job.MarkerPath, out+".rc.") {
+		t.Fatalf("marker 应为输出路径+.rc.+任务身份（tools#161）: %s", job.MarkerPath)
+	}
+	if _, err := os.Stat(job.MarkerPath); err != nil {
+		t.Fatalf("marker 文件应在场: %v", err)
 	}
 }
 
@@ -135,8 +138,8 @@ func TestPathWithSpacesVerbatim(t *testing.T) {
 	if b, err := os.ReadFile(out); err != nil || string(b) != "payload" {
 		t.Fatalf("输出文件逐字: %q %v", b, err)
 	}
-	if _, err := os.Stat(out + ".rc"); err != nil {
-		t.Fatalf("marker 路径: %v", err)
+	if _, err := os.Stat(job.MarkerPath); err != nil {
+		t.Fatalf("marker 路径（带任务身份）: %v", err)
 	}
 	ok, err := job.Cleanup()
 	if err != nil || !ok {
