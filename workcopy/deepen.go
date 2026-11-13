@@ -163,7 +163,7 @@ func ensureMergeBase(ctx context.Context, dir, baseBranch string, timeout time.D
 		}
 		auth = authGitArgs(scheme, opts.Token)
 	}
-	for i := 0; i < opts.maxRounds(); i++ {
+	for i := range opts.maxRounds() {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			break
