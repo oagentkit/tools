@@ -38,6 +38,7 @@ gofmt / go vet / go test -race / golangci-lint / go mod tidy -diff 全绿。
 
 - 构建：地板对齐 concurrency v0.36.0、logx v0.11.0
 
+- 杂务(deps)：依赖地板追到最新——github.com/oagentkit/guardx v0.25.1
 - 杂务(deps)：依赖地板追到最新——github.com/oagentkit/guardx v0.25.0
 
 | 依赖 | 现地板 | 抬到 |
