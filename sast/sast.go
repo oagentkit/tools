@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -294,10 +295,11 @@ func runSemgrep(ctx context.Context, cfg Config, dir string, paths []string,
 }
 
 // FocusPaths 聚焦文件清单整形（存在性不做校验——以 diff 清单为准，缺失文件
-// semgrep 自行忽略；>semgrepMaxPaths 回退 nil = 全仓；含 ".." 的路径剔除防
-// 路径穿越出工作副本）。"-" 开头的文件名刻意保留：option-inert 由 runSemgrep
-// 的 argv "--" 端界符保证（tools#62），在此剔除反而留下「改个名就逃出聚焦
-// 扫描」的内容逃出面。
+// semgrep 自行忽略；>semgrepMaxPaths 回退 nil = 全仓；绝对路径与含 ".." 的
+// 路径一律剔除防路径穿越出工作副本——绝对路径不含 .. 段却同样越界，semgrep
+// 的位置参数不受 Dir 约束，tools#177）。"-" 开头的文件名刻意保留：
+// option-inert 由 runSemgrep 的 argv "--" 端界符保证（tools#62），在此剔除
+// 反而留下「改个名就逃出聚焦扫描」的内容逃出面。
 func FocusPaths(paths []string) []string {
 	if len(paths) == 0 || len(paths) > semgrepMaxPaths {
 		return nil
@@ -307,7 +309,7 @@ func FocusPaths(paths []string) []string {
 	for _, p := range paths {
 		p = strings.TrimSpace(p)
 		// 按路径段判 ..（v1..v2.go 这类合法文件名不误伤；整串 Contains 会剔除）
-		if p == "" || seen[p] || hasDotDotSegment(p) {
+		if p == "" || seen[p] || hasDotDotSegment(p) || absLikePath(p) {
 			continue
 		}
 		seen[p] = true
@@ -362,4 +364,23 @@ func hasDotDotSegment(p string) bool {
 		}
 	}
 	return false
+}
+
+// absLikePath 绝对路径形态判定（tools#177）：本机绝对路径（filepath.IsAbs）
+// 加 Windows 盘符形态（C:/… 与 C:\…——Go 的 filepath.IsAbs 在 unix 构建下
+// 不认盘符）。清单来源不止 git-diff（agent 产出、消费方拼接），绝对路径作为
+// semgrep 位置参数不受 Dir（工作副本根）约束，会越出工作副本扫描——与 ..
+// 段同规剔除。
+func absLikePath(p string) bool {
+	if filepath.IsAbs(p) {
+		return true
+	}
+	if len(p) >= 3 && isDriveLetter(p[0]) && p[1] == ':' && (p[2] == '/' || p[2] == '\\') {
+		return true
+	}
+	return false
+}
+
+func isDriveLetter(c byte) bool {
+	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
 }
