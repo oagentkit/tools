@@ -252,7 +252,11 @@ type Decision struct {
 	//     destructive.go 的 destructiveKernel）；
 	//   - eval "rm -rf /x" 的 rm 是字符串数据不是语法调用，只见 eval；
 	//   - Dynamic=true 的调用（参数含 $()/反引号/$VAR）同样入列——动态参数
-	//     本身就是风险信号。
+	//     本身就是风险信号；
+	//   - 超长为头/尾窗 best-effort 集合；**解析失败为空**（tools#181，与
+	//     Redirs 的同款声明对称）——判「文本里有没有出现某调用」前先看
+	//     Unevaluated/OverLength/Unparsed：拒绝判定路径上拿到空集是「没判」
+	//     不是「判净」，空集不等于判净。
 	AllCalls []Invocation
 	// Redirs 全 AST 的重定向事实集（syntax.Walk，tools#79）：语句级、子 shell
 	// (…)、{ …; }、命令替换 $(…) 里的重定向全部可见，与判定路径是否提前返回
