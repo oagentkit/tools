@@ -2,6 +2,44 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.14.7] — 2026-11-14
+
+### 修复(bashguard)：AllCalls 文档补解析失败为空的语义边界——与 Redirs 同款声明对称,空集不等于判净
+
+- de35e4f
+
+### 修复(websearch)：Service/Result 文档补威胁等级与消毒义务——半可信外网内容,拼装前须过结构化消毒或走 AsTool
+
+- b673bc5
+
+### 修复(websearch)：AsTool 构造期守卫翻 fail-closed——验证链路自身拿不到可判定结论即 panic,静默暗道关闭
+
+- f9dfa39
+
+### 修复(acpx)：截断判定迁到 procx.RunDetailed 结构化字段 StdoutTruncated——删除人读文案尾缀匹配,文案漂移不再静默重开 #94 已关洞
+
+- 8a754d2
+
+### 修复(sast)：FocusPaths 对绝对路径(含 Windows 盘符形态)与 .. 段同规剔除——semgrep 位置参数不受 Dir 约束,扫描面不再越出工作副本
+
+- 5d7e33f
+
+### 修复(workcopy)：refresh 不再从可写的 .git/config 反推 origin 附 token——fetch URL 与 prepare 同源 cloneURL 现算,篡改 config 不再外带凭证
+
+- 8b3921c
+
+### 修复(bashguard)：重定向设备写进不可逆判定——destructiveScan 增吃 Redirs 事实面,echo x > /dev/sda 与 dd of= 同判
+
+- 186c58a
+
+### 修复(bashguard)：git 强推/删引用形态补判——+refspec 同效强推与 branch/tag/remote 删除类进不可逆档
+
+- 13f4d49
+
+- 杂务(deps)：依赖地板追到最新——concurrency v0.36.1 / textx v0.12.0
+
+- 格式：gofmt 四文件（CI Lint 门禁）
+
 ## [v0.14.6] — 2026-11-14
 
 ### 修复(bashguard,workcopy,bgjob)：六单清零——eval 操作数整体、联合短旗 -c 载荷、deepen 凭证注入、marker 任务身份、ssh 内层登记、快照 rune 边界（#158 #159 #160 #161 #162 #165）
