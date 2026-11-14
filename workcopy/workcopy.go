@@ -115,7 +115,7 @@ func (p *Pool) Ensure(ctx context.Context, key WorktreeKey) (string, error) {
 	// PR refspec，base 分支浅对象已在库，省掉整次浅克隆。领用（rc++）阻断 Sweep
 	// 与并发二次领用；刷新失败回落全新克隆。
 	if claim := p.claimStale(key); claim != nil {
-		if dir, ok := p.refreshClaim(ctx, k, key, claim, token); ok {
+		if dir, ok := p.refreshClaim(ctx, k, key, claim, baseURL, token); ok {
 			return dir, nil
 		}
 	}
@@ -161,13 +161,13 @@ func (p *Pool) claimStale(key WorktreeKey) *wcEntry {
 // refreshClaim 对领用的保留目录做增量刷新。ok=false 表示刷新失败（已释放领用，
 // 调用方回落全新克隆）。返回即注销 in-flight（tools#108）：成功路径条目已重挂
 // entries（保护回归 entries 载体），失败路径目录交回 Sweep/孤儿扫描按 TTL 回收。
-func (p *Pool) refreshClaim(ctx context.Context, k string, key WorktreeKey, claim *wcEntry, token string) (dir string, ok bool) {
+func (p *Pool) refreshClaim(ctx context.Context, k string, key WorktreeKey, claim *wcEntry, baseURL, token string) (dir string, ok bool) {
 	defer func() {
 		p.mu.Lock()
 		delete(p.inflight, claim.dir)
 		p.mu.Unlock()
 	}()
-	if err := p.refresh(ctx, claim.dir, key, token); err != nil {
+	if err := p.refresh(ctx, claim.dir, key, baseURL, token); err != nil {
 		// 刷新失败（force push 抹掉旧引用等）→ 回落全新克隆。条目已随领用摘牌，
 		// 不回挂——checkout 中途失败的工作树可能撕裂，回挂旧 key 会让后续同
 		// head 的 Ensure 静默命中混合态目录（目录交 Sweep/孤儿扫描按 TTL 回收）
@@ -396,22 +396,20 @@ func (p *Pool) prepare(ctx context.Context, key WorktreeKey, baseURL, token stri
 // 浅对象已在库——这是"第二次审查少拉取"的收益来源），checkout --force 与
 // prepare 末步同款。origin/<默认分支> 不随刷新前移，base 端新鲜度以首次克隆
 // 为界（由保留 TTL 限定窗口）；默认分支大跨度强推场景由调用方全新克隆兜底
-// （refresh 失败即回落 prepare）。fetch 鉴权同 prepare（tools#124）：origin
-// URL 恒为无凭证形态，token 经进程级 -c 参数临时注入。
-func (p *Pool) refresh(ctx context.Context, dir string, key WorktreeKey, token string) error {
+// （refresh 失败即回落 prepare）。
+//
+// fetch URL 与 prepare 同源（tools#176）：cloneURL(baseURL,…) 现算、直接以
+// URL 为 fetch 目标，**不读 .git/config**——config 对工作树内的执行方（被审
+// agent/代码）可写，从 config 反推 scheme 并附加 `Authorization: Basic <token>`
+// 即可在改写 origin 的下一次 refresh 时把宿主凭证带到任意主机（http 形态全程
+// 明文）。鉴权 scheme 判定同样来自该 URL：config 与 token 注入恒脱钩，
+// 可信面只剩调用方传入的 baseURL。
+func (p *Pool) refresh(ctx context.Context, dir string, key WorktreeKey, baseURL, token string) error {
 	insecureTLS := p.InsecureTLSOf != nil && p.InsecureTLSOf(key.Platform)
-	// 刷新路径没有现成 baseURL——从 config 的 origin URL 反推 scheme
-	// （file:// fixture 无鉴权面，authGitArgs 返回 nil）。
-	out, _, _, oerr := procx.Run(ctx, procx.RunRequest{
-		Argv: []string{"git", "-C", dir, "remote", "get-url", "origin"}, Timeout: 10 * time.Second,
-	})
-	scheme := "https://"
-	if oerr == nil {
-		scheme = schemeOf(strings.TrimSpace(out))
-	}
-	auth := authGitArgs(scheme, token)
+	url := cloneURL(baseURL, key.Owner, key.Repo, token)
+	auth := authGitArgs(schemeOf(url), token)
 	steps := [][]string{
-		append(append([]string{"git"}, auth...), "-C", dir, "fetch", "--depth", "1", "origin", prRefspec(key.Platform, key.Number)),
+		append(append([]string{"git"}, auth...), "-C", dir, "fetch", "--depth", "1", url, prRefspec(key.Platform, key.Number)),
 		{"git", "-C", dir, "checkout", "--force", "FETCH_HEAD"},
 	}
 	for _, args := range steps {
