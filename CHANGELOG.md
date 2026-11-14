@@ -37,6 +37,8 @@ bash --rcfile x -c(选项间夹裸 operand)/env bash -c/sudo bash -c 不解包,
 - guardx/permgate 未来改消费本入口(本仓只导出,不改 guardx);判定面
   (Analyze 只读/不可逆)对三形态的内核兜底同批钉测防回归
 
+- 杂务(deps)：依赖地板追到最新——github.com/oagentkit/guardx v0.25.1 → v0.26.0
+
 ## [v0.14.7] — 2026-11-14
 
 ### 修复(bashguard)：AllCalls 文档补解析失败为空的语义边界——与 Redirs 同款声明对称,空集不等于判净
