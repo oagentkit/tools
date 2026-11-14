@@ -255,15 +255,24 @@ func (p *Pool) Release(key WorktreeKey) {
 // fetch 的进程级 `-c http.extraheader`——dir 为 Ensure 返回的已登记工作副本
 // 目录。CredentialOf 未配置/该平台无凭证时退化为无鉴权 deepen（公有远端照常
 // 可用，不复刻 Ensure 的「缺凭证即报错」——clone 必须凭证，deepen 未必）。
+//
+// 期望 clone 源同批自动注入（tools#184）：CredentialOf 返回的 baseURL 与 key
+// 的 owner/repo 经 WithCloneSource 传入，deepen fetch 的目标 URL 由 cloneURL
+// 现算（与 prepare/refresh 同源）、直用 URL 不读 .git/config——工作树写手
+// 篡改 origin 的 token 外带通道在 Pool 形态下默认关闭。自动注入排在调用方
+// 显式 opts 之前：显式 WithCloneSource 仍可覆盖（与 WithToken 同序纪律）。
 func (p *Pool) EnsureMergeBase(ctx context.Context, dir string, key WorktreeKey, baseBranch string, timeout time.Duration, opts ...DeepenOption) error {
-	var token string
+	var token, baseURL string
 	if p.CredentialOf != nil {
-		if _, tok, ok := p.CredentialOf(key.Platform); ok {
-			token = tok
+		if b, tok, ok := p.CredentialOf(key.Platform); ok {
+			baseURL, token = b, tok
 		}
 	}
-	return EnsureMergeBase(ctx, dir, baseBranch, timeout,
-		append([]DeepenOption{WithToken(token)}, opts...)...)
+	inject := []DeepenOption{WithToken(token)}
+	if baseURL != "" {
+		inject = append(inject, WithCloneSource(baseURL, key.Owner, key.Repo))
+	}
+	return EnsureMergeBase(ctx, dir, baseBranch, timeout, append(inject, opts...)...)
 }
 
 func prRefspec(platform, number string) string {
