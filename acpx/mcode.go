@@ -68,7 +68,8 @@ type mcodeEnvelope struct {
 
 // Run 执行 mcode exec 任务。
 func (m *Mcode) Run(ctx context.Context, req RunRequest) (*RunResult, error) {
-	stdout, stderr, code, err := runCLI(ctx, req, m.buildArgv(req), nil)
+	res, err := runCLI(ctx, req, m.buildArgv(req), nil)
+	stdout, stderr, code := res.Stdout, res.Stderr, res.ExitCode
 	if err != nil {
 		return nil, err // procx 层失败：启动失败/超时/非零退出（stderr 已嵌入 error）
 	}

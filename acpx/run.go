@@ -17,14 +17,19 @@ import (
 // runCLI 适配器统一执行骨架：validate → 进程组执行（procx：环境白名单 +
 // timeout + stdout 限容/按行拆分单源）。各适配器只负责 argv 构造与事件流解析。
 // stderr 一并透传（RunResult.Stderr 的排障通道——此前整条丢弃）。
-func runCLI(ctx context.Context, req RunRequest, argv []string, onLine func(string)) (stdout, stderr string, code int, err error) {
+//
+// 结构化出口（tools#178）：走 procx.RunDetailed，截断事实以
+// RunResult.StdoutTruncated 结构化字段透出（procx v0.12.6 起，procx#92）——
+// fail-closed 截断守门（tools#94）此前 `strings.Contains("（stdout 超过")` +
+// `HasSuffix("已截断）")` 匹配 procx 的**人读文案**，文案一改即静默失效（已关
+// 的 P1 洞原样回归）、CLI 自身输出恰以该短语收尾即误判（拿文案当协议）。
+func runCLI(ctx context.Context, req RunRequest, argv []string, onLine func(string)) (procx.RunResult, error) {
 	if err := req.validate(); err != nil {
-		return "", "", -1, err
+		return procx.RunResult{ExitCode: -1}, err
 	}
-	stdout, stderr, code, err = procx.Run(ctx, procx.RunRequest{
+	return procx.RunDetailed(ctx, procx.RunRequest{
 		Argv: argv, Dir: req.WorkDir, Env: req.Env, Timeout: req.Timeout, OnLine: onLine,
 	})
-	return stdout, stderr, code, err
 }
 
 // stderrTail 子进程 stderr 尾巴（≤400 rune，rune 对齐）。错误路径 procx 已把
@@ -62,17 +67,14 @@ func fallbackResult(stdout, stderr string, code int) *RunResult {
 	return &RunResult{Text: strings.TrimSpace(stdout), ExitCode: code, Raw: []byte(stdout), Stderr: stderrTail(stderr)}
 }
 
-// stdoutTruncated 判定 stdout 是否带 procx 截断留痕（tools#94）：noteTruncated
-// 在 captured stdout 尾部追加「\n…（stdout 超过 N 字节上限，已截断）」。双条件
-// 从紧判定（截断短语 + 尾缀），代理 CLI 自身输出出现完整标记形态的概率远低
-// 于误报面。
-func stdoutTruncated(stdout string) bool {
-	return strings.Contains(stdout, "（stdout 超过") && strings.HasSuffix(strings.TrimRight(stdout, " \t\r\n"), "已截断）")
-}
-
 // lostTerminalErr 终态丢失守门（tools#83）：stdout 里**存在**协议终态事件
 // 形状的行、却没被 OnLine 流识别成终态（hasTerm=false）时如实报错，拒绝把
 // 整条事件流原文当「最终回答」成功返回。
+//
+// truncated 是 procx 的结构化截断事实（RunResult.StdoutTruncated，tools#178）：
+// 截断判定面 = 结构化字段而非 noteTruncated 人读文案（文案一改即静默失效、
+// CLI 输出恰以该短语收尾即误判——拿文案当协议，procx v0.12.6 起已给结构化
+// 出口，本仓迁移）。
 //
 // 为什么会有这种组合：procx 的 lineWriter 对单行超 maxLineLen（1MB）的行
 // 整行丢弃且对调用方零信号（tools#83）——agent 任务产出大文件/长 diff 时
@@ -85,15 +87,15 @@ func stdoutTruncated(stdout string) bool {
 // 流水线有未知故障——报错（错误信息点名两种可能成因）让调用方排障，好于把
 // 原始事件流当成功答案注入下游 agent 循环。isTerminalLine 逐行做形状判定
 // （各适配器提供自家终态形状的廉价判定），首条命中即返回。
-func lostTerminalErr(who, stdout string, hasTerm bool, isTerminalLine func(string) bool) error {
+func lostTerminalErr(who, stdout string, truncated, hasTerm bool, isTerminalLine func(string) bool) error {
 	if hasTerm || isTerminalLine == nil {
 		return nil
 	}
 	// 截断守门（tools#94）：procx cappedBuffer 只保 stdout 前 8MB，超出部分
-	// 连同终端行一起被静默丢弃——「无终态 + 尾部截断留痕」= 终端行大概率已
+	// 连同终端行一起被静默丢弃——「无终态 + 截断事实在场」= 终端行大概率已
 	// 随截断被丢，在残缺 stdout 里找不到终态形状是必然而非异常。fail-closed：
 	// 拒绝把残缺事件流当成功回答兜底。
-	if stdoutTruncated(stdout) {
+	if truncated {
 		return fmt.Errorf("acpx: %s stdout 触发截断上限且未见协议终态——终端行大概率已随截断被丢弃，拒绝把残缺事件流当最终回答兜底（tools#94）", who)
 	}
 	for len(stdout) > 0 {
@@ -113,12 +115,13 @@ func lostTerminalErr(who, stdout string, hasTerm bool, isTerminalLine func(strin
 // contentLineErr 正文行对账守门（tools#105）：codex/kimi 的正文来源行不是协议
 // 终态（是数据行，每条都进 lastText）——「OnLine 识别的条数」与「stdout 里现存
 // 的同形状条数」对不上 ⇒ 有行被 lineWriter 整行丢弃（>1MB，tools#83 机制），
-// 手里的最后一条可能是陈旧断片；截断留痕在场（tools#94）时流尾被剪、对账本身
-// 不可证。两条都 fail-closed：拒绝把部分文本当最终回答成功返回——吐过部分文本
-// 的跑曾借「text 非空即返回」绕过终态/截断守门（#105 残留面，#83 只在空文本时
-// 接管）。seen 须与 isContentLine 同判据计数（OnLine 实际识别的条数）。
-func contentLineErr(who, stdout string, seen int, isContentLine func(string) bool) error {
-	if stdoutTruncated(stdout) {
+// 手里的最后一条可能是陈旧断片；截断事实在场（tools#94，结构化字段
+// StdoutTruncated——tools#178）时流尾被剪、对账本身不可证。两条都 fail-closed：
+// 拒绝把部分文本当最终回答成功返回——吐过部分文本的跑曾借「text 非空即返回」
+// 绕过终态/截断守门（#105 残留面，#83 只在空文本时接管）。seen 须与
+// isContentLine 同判据计数（OnLine 实际识别的条数）。
+func contentLineErr(who, stdout string, truncated bool, seen int, isContentLine func(string) bool) error {
+	if truncated {
 		return fmt.Errorf("acpx: %s stdout 触发截断上限——正文行可能已随截断丢失，拒绝把部分文本当最终回答兜底（tools#94/#105）", who)
 	}
 	n := 0

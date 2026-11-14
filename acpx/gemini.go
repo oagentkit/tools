@@ -80,19 +80,21 @@ func (g *Gemini) Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 		argv = append(argv, "--approval-mode", v)
 	}
 
-	stdout, stderr, code, err := runCLI(ctx, req, argv, nil)
+	res, err := runCLI(ctx, req, argv, nil)
 	if err != nil {
 		return nil, err
 	}
+	stdout, stderr, code := res.Stdout, res.Stderr, res.ExitCode
 
 	var out geminiOut
 	if err := parseJSONOut(stdout, &out); err != nil {
 		// 主解析失败 ≠ 立即兜底（tools#110，三路收口）：
-		//   - 截断留痕在场（stdoutTruncated）⇒ 单对象 JSON 已残缺，fail-closed
+		//   - 截断事实在场（StdoutTruncated 结构化字段，tools#178——不匹配
+		//     procx 人读截断文案）⇒ 单对象 JSON 已残缺，fail-closed
 		//     拒绝兜底——残片连同截断尾注曾被当成功答案全款走 token 账单；
 		//   - error 信封在场（主解析的失败常是其它字段形态漂移）⇒ 如实报错；
 		//   - 两者皆无才允许全文兜底（非 JSON 输出：版本差异/日志混入）。
-		if stdoutTruncated(stdout) {
+		if res.StdoutTruncated {
 			return nil, geminiTruncatedErr(g.name)
 		}
 		if msg := envelopeFallbackErrMsg(stdout); msg != "" {
@@ -115,7 +117,7 @@ func (g *Gemini) Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 	if out.Response == "" {
 		// 空响应兜底同样过截断守门（tools#110）：截断形态下「解析成功但响应
 		// 为空」的残stdout 兜底会把截断留痕混进答案
-		if stdoutTruncated(stdout) {
+		if res.StdoutTruncated {
 			return nil, geminiTruncatedErr(g.name)
 		}
 		return fallbackResult(stdout, stderr, code), nil

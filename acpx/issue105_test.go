@@ -163,20 +163,21 @@ func TestPiPartialTextGateIndependentOfText(t *testing.T) {
 	}
 }
 
-// TestContentLineErr 单源判定：截断留痕在场即报错；条数对齐放行；多出的行报错。
+// TestContentLineErr 单源判定：截断事实在场（结构化字段，tools#178——文案
+// 缺席也命中）即报错；条数对齐放行；多出的行报错。
 func TestContentLineErr(t *testing.T) {
 	line := `{"role":"assistant","content":"片段"}`
 	isContent := kimiTerminalLine
-	if err := contentLineErr("kimi", "…（stdout 超过 8388608 字节上限，已截断）", 0, isContent); err == nil || !strings.Contains(err.Error(), "tools#94") {
-		t.Fatalf("截断留痕必须 fail-closed: %v", err)
+	if err := contentLineErr("kimi", "plain events", true, 0, isContent); err == nil || !strings.Contains(err.Error(), "tools#94") {
+		t.Fatalf("截断事实在场必须 fail-closed（判定面=结构化字段，tools#178）: %v", err)
 	}
-	if err := contentLineErr("kimi", line+"\n"+line+"\n", 2, isContent); err != nil {
+	if err := contentLineErr("kimi", line+"\n"+line+"\n", false, 2, isContent); err != nil {
 		t.Fatalf("条数对齐必须放行: %v", err)
 	}
-	if err := contentLineErr("kimi", line+"\n"+line+"\n", 1, isContent); err == nil || !strings.Contains(err.Error(), "仅识别 1 条") {
+	if err := contentLineErr("kimi", line+"\n"+line+"\n", false, 1, isContent); err == nil || !strings.Contains(err.Error(), "仅识别 1 条") {
 		t.Fatalf("多出的行必须报错: %v", err)
 	}
-	if err := contentLineErr("kimi", "plain text mode", 0, isContent); err != nil {
+	if err := contentLineErr("kimi", "plain text mode", false, 0, isContent); err != nil {
 		t.Fatalf("无正文形状必须放行: %v", err)
 	}
 }
