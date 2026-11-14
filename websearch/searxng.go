@@ -12,6 +12,7 @@ import (
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
+	"github.com/cloudwego/eino/schema"
 
 	"github.com/oagentkit/guardx/fence"
 	"github.com/oekit/pkg/httpjson"
@@ -139,17 +140,44 @@ func (s *Searxng) AsTool() tool.BaseTool {
 	if err != nil {
 		panic(fmt.Sprintf("searxng: 构建 web_search 工具失败: %v", err)) // panic 契约见 AsTool doc（rag#31 同族对齐）
 	}
-	// 构造期守卫（tools#128）：query 参数的 description 必须真的进了 schema。
-	// eino jsonschema 对无 `=` 的裸标签**整条静默丢弃**（同族静默失效编译期
-	// 不可见）——守卫把它变成构造期 panic，与本函数 panic 契约同族。
-	if info, ierr := t.Info(context.Background()); ierr == nil && info != nil && info.ParamsOneOf != nil {
-		if js, jerr := info.ToJSONSchema(); jerr == nil && js != nil && js.Properties != nil {
-			if q, ok := js.Properties.Get("query"); !ok || q == nil || q.Description == "" {
-				panic("searxng: searchIn.Query 的 jsonschema description 未进 schema——无 `=` 的裸标签被 eino 静默丢弃，须用 `description=...` 键值形态（tools#128）")
-			}
-		}
-	}
+	// 构造期守卫（tools#128；tools#179 翻成 fail-closed）：query 参数的
+	// description 必须真的进了 schema，验证链路自身拿不到可判定结论同样
+	// panic——见 guardQueryDescription。
+	guardQueryDescription(mustToolInfo(t))
 	return t
+}
+
+// mustToolInfo 取工具 schema 信息（错误按 panic 契约上抛——与 AsTool 的
+// 构造期失败同族）。
+func mustToolInfo(t tool.BaseTool) (info *schema.ToolInfo, ierr error) {
+	return t.Info(context.Background())
+}
+
+// guardQueryDescription 构造期守卫验证链（tools#128；tools#179 翻成
+// fail-closed）：query 参数的 description 必须真的进了 schema。eino jsonschema
+// 对无 `=` 的裸标签**整条静默丢弃**（同族静默失效编译期不可见）——守卫把它
+// 变成构造期 panic，与 AsTool 的 panic 契约同族。
+//
+// 「拿不到可判定结论 = panic」（tools#179）：验证链路自身失败（Info 报错 /
+// info 缺席 / ParamsOneOf 缺席 / ToJSONSchema 报错 / Properties 缺席）时守卫
+// 无法验证，同样 panic——此前任一层拿不到结论即整段静默跳过，#128 要消灭的
+// 静默失效从守卫自身的暗道回来（description 缺失被静默放行、零 panic 零报错）。
+// 只有「验证完成且 description 为空」才报 tools#128 的原始文案。
+func guardQueryDescription(info *schema.ToolInfo, ierr error) string {
+	if ierr != nil || info == nil || info.ParamsOneOf == nil {
+		panic(fmt.Sprintf("searxng: 构造期守卫无法验证 schema（Info err=%v, info 在场=%v, ParamsOneOf 在场=%v）——静默放行即重开 tools#128 的失效面，按 panic 契约处置（tools#179）",
+			ierr, info != nil, info != nil && info.ParamsOneOf != nil))
+	}
+	js, jerr := info.ToJSONSchema()
+	if jerr != nil || js == nil || js.Properties == nil {
+		panic(fmt.Sprintf("searxng: 构造期守卫无法验证 schema（ToJSONSchema err=%v, schema 在场=%v）——静默放行即重开 tools#128 的失效面，按 panic 契约处置（tools#179）",
+			jerr, js != nil))
+	}
+	q, ok := js.Properties.Get("query")
+	if !ok || q == nil || q.Description == "" {
+		panic("searxng: searchIn.Query 的 jsonschema description 未进 schema——无 `=` 的裸标签被 eino 静默丢弃，须用 `description=...` 键值形态（tools#128）")
+	}
+	return q.Description
 }
 
 // fallbackHTTP nil-HTTP 兜底 client（进程级单例——连接池复用）。
