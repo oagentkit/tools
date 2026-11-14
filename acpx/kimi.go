@@ -56,7 +56,7 @@ func (k *Kimi) Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 		}
 	}
 
-	stdout, stderr, code, err := runCLI(ctx, req, argv, onLine)
+	res, err := runCLI(ctx, req, argv, onLine)
 	// 中断类执行错（超时/取消/被信号杀死）不得因「收到过部分 assistant 消息」
 	// 被吞（tools#46）：kimi 没有协议终态事件，「收到过 assistant 消息」只是
 	// 弱代理——超时被杀时任务并未完成，半截文本曾被整体按成功返回（ExitCode
@@ -64,8 +64,8 @@ func (k *Kimi) Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 	// 部分文本挂 RunResult（Interrupted=true）供排障。
 	if err != nil && isInterruptedExec(err) {
 		return &RunResult{
-			Text: lastAssistant, ExitCode: code, Raw: []byte(stdout),
-			Stderr: stderrTail(stderr), Interrupted: true,
+			Text: lastAssistant, ExitCode: res.ExitCode, Raw: []byte(res.Stdout),
+			Stderr: stderrTail(res.Stderr), Interrupted: true,
 		}, err
 	}
 	// 终态优先（与 claude/codex/pi/mimo 同契约）：已收到 assistant 消息
@@ -81,14 +81,15 @@ func (k *Kimi) Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 	// diff 的最终消息即可触发）或截断留痕在场（流尾被剪、对账不可证）时，
 	// 手里的 lastAssistant 是陈旧断片，拒绝当最终回答成功返回。对齐且无截断
 	// 时保留原有宽容路径。
-	if lost := contentLineErr("kimi", stdout, seen, kimiTerminalLine); lost != nil {
+	// 截断判定面 = StdoutTruncated 结构化字段（tools#178），不尾缀匹配文案。
+	if lost := contentLineErr("kimi", res.Stdout, res.StdoutTruncated, seen, kimiTerminalLine); lost != nil {
 		return nil, lost
 	}
 	if lastAssistant == "" {
 		// stream-json 不可用（旧版本/文本模式）：全文兜底
-		lastAssistant = strings.TrimSpace(stdout)
+		lastAssistant = strings.TrimSpace(res.Stdout)
 	}
-	return &RunResult{Text: lastAssistant, ExitCode: code, Raw: []byte(stdout), Stderr: stderrTail(stderr)}, nil
+	return &RunResult{Text: lastAssistant, ExitCode: res.ExitCode, Raw: []byte(res.Stdout), Stderr: stderrTail(res.Stderr)}, nil
 }
 
 // kimiTerminalLine 正文形状判定（tools#83 守门用）：assistant 消息行（与

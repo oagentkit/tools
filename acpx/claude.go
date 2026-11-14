@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/oagentkit/runtime/procx"
 )
 
 // 编译期断言。
@@ -36,8 +38,8 @@ func (c *ClaudeCode) Capabilities() Capability {
 // Run 执行 headless 任务（stream-json NDJSON 事件流解析）。
 func (c *ClaudeCode) Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 	st := &claudeStream{req: req}
-	stdout, stderr, code, err := runCLI(ctx, req, c.buildArgv(req), st.handleLine)
-	return st.finalize(stdout, stderr, code, err)
+	res, err := runCLI(ctx, req, c.buildArgv(req), st.handleLine)
+	return st.finalize(res, err)
 }
 
 // buildArgv 构造 claude 族 CLI 参数（协议面固定：-p + stream-json 事件流）。
@@ -159,16 +161,17 @@ func claudeTerminalLine(line string) bool {
 // finalize 收尾装配（三段式骨架）：终态 = result 事件真的到达（init-only
 // 空壳不具备终态语义）；终态优先无条件于文本非空（空 result 文本是合法成功
 // ——成功语义）；is_error 终态如实报错（tools#82，见 onResult）；无终态时
-// 先过终态丢失守门（tools#83）再全文兜底。
-func (s *claudeStream) finalize(stdout, stderr string, code int, err error) (*RunResult, error) {
+// 先过终态丢失守门（tools#83）再全文兜底。截断判定面 = RunResult.StdoutTruncated
+// 结构化字段（tools#178），不尾缀匹配 procx 截断文案。
+func (s *claudeStream) finalize(res procx.RunResult, err error) (*RunResult, error) {
 	// 守门只在无执行错时接管：执行错路径（超时/非零退出）finalizeStream
 	// 自会如实上抛，不因终态形状在 stdout 而改写错误语义
 	if err == nil {
-		if lost := lostTerminalErr("claude", stdout, s.sawResult, claudeTerminalLine); lost != nil {
+		if lost := lostTerminalErr("claude", res.Stdout, res.StdoutTruncated, s.sawResult, claudeTerminalLine); lost != nil {
 			return nil, lost
 		}
 	}
-	return finalizeStream(stdout, stderr, code, err, s.result, s.sawResult && s.result != nil, streamError("claude", "运行错误", s.errMsg))
+	return finalizeStream(res.Stdout, res.Stderr, res.ExitCode, err, s.result, s.sawResult && s.result != nil, streamError("claude", "运行错误", s.errMsg))
 }
 
 // claudeEvent stream-json 事件（容错解析：只取需要的字段）。

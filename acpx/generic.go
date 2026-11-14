@@ -86,7 +86,8 @@ func (g *GenericAgent) Run(ctx context.Context, req RunRequest) (*RunResult, err
 			argv = append(argv, a)
 		}
 	}
-	stdout, stderr, code, err := runCLI(ctx, req, argv, nil)
+	res, err := runCLI(ctx, req, argv, nil)
+	stdout, stderr, code := res.Stdout, res.Stderr, res.ExitCode
 	if err != nil {
 		return nil, err
 	}

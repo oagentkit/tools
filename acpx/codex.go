@@ -3,6 +3,8 @@ package acpx
 import (
 	"context"
 	"encoding/json"
+
+	"github.com/oagentkit/runtime/procx"
 )
 
 // 编译期断言。
@@ -34,8 +36,8 @@ func (c *Codex) Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 	}
 	defer cleanup()
 	st := &codexStream{req: req, lastMsg: lastMsg}
-	stdout, stderr, code, err := runCLI(ctx, req, c.buildArgv(req, lastMsg), st.handleLine)
-	return st.finalize(stdout, stderr, code, err)
+	res, err := runCLI(ctx, req, c.buildArgv(req, lastMsg), st.handleLine)
+	return st.finalize(res, err)
 }
 
 // buildArgv 构造 codex CLI 参数（协议面固定：exec --json --output-last-message；argv 语义不改）。
@@ -98,13 +100,13 @@ func (s *codexStream) handleLine(line string) {
 
 // finalize 收尾装配：output-last-message 优先（官方保证的最终消息，在场即权威）、
 // 事件流 lastText 兜底；错误如实上抛。文件缺席时 lastText 先过正文行对账守门
-// （tools#83/#94/#105）再兜底。
-func (s *codexStream) finalize(stdout, stderr string, code int, err error) (*RunResult, error) {
+// （tools#83/#94/#105，截断判定面 = StdoutTruncated 结构化字段，tools#178）再兜底。
+func (s *codexStream) finalize(res procx.RunResult, err error) (*RunResult, error) {
 	if err != nil {
 		// 与 claude 族一致：output-last-message 已有最终消息（agent 正常完成但
 		// 退出码非零）时以结果为准
 		if text := readFileTrim(s.lastMsg); text != "" {
-			return &RunResult{Text: text, Usage: s.usage, ExitCode: code, Raw: []byte(stdout), Stderr: stderrTail(stderr)}, nil
+			return &RunResult{Text: text, Usage: s.usage, ExitCode: res.ExitCode, Raw: []byte(res.Stdout), Stderr: stderrTail(res.Stderr)}, nil
 		}
 		return nil, err
 	}
@@ -119,15 +121,15 @@ func (s *codexStream) finalize(stdout, stderr string, code int, err error) (*Run
 		// 终态/截断守门（tools#83/#94/#105）：官方 last-message 文件缺席时，
 		// lastText 无论是否非空都要过守门——吐过部分文本的跑曾借「text 非空
 		// 即返回」绕过守门（#105 残留面）。对账（assistant_message 行数 vs
-		// 识别数）对不上 = 有行被丢，手里的 lastText 是陈旧断片；截断留痕在场
+		// 识别数）对不上 = 有行被丢，手里的 lastText 是陈旧断片；截断事实在场
 		// = 流尾被剪、对账不可证。都 fail-closed；对齐且无截断时保留 lastText
 		// 宽容路径（旧版本/写文件失败的场景）。
-		if lost := contentLineErr("codex", stdout, s.msgSeen, codexTerminalLine); lost != nil {
+		if lost := contentLineErr("codex", res.Stdout, res.StdoutTruncated, s.msgSeen, codexTerminalLine); lost != nil {
 			return nil, lost
 		}
 		text = s.lastText
 	}
-	return &RunResult{Text: text, Usage: s.usage, ExitCode: code, Raw: []byte(stdout), Stderr: stderrTail(stderr)}, nil
+	return &RunResult{Text: text, Usage: s.usage, ExitCode: res.ExitCode, Raw: []byte(res.Stdout), Stderr: stderrTail(res.Stderr)}, nil
 }
 
 // codexTerminalLine 正文形状判定（tools#83 守门用）：assistant_message 的

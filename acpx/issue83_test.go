@@ -73,13 +73,13 @@ func TestKimiPlainTextFallbackUnaffected(t *testing.T) {
 
 // TestLostTerminalErr 守门单源：hasTerm=true 放行、形状命中报错、无形状放行。
 func TestLostTerminalErr(t *testing.T) {
-	if err := lostTerminalErr("x", "{\"type\":\"result\"}\n", true, claudeTerminalLine); err != nil {
+	if err := lostTerminalErr("x", "{\"type\":\"result\"}\n", false, true, claudeTerminalLine); err != nil {
 		t.Fatalf("hasTerm=true 必须放行: %v", err)
 	}
-	if err := lostTerminalErr("x", "noise\nno shape here\n", false, claudeTerminalLine); err != nil {
+	if err := lostTerminalErr("x", "noise\nno shape here\n", false, false, claudeTerminalLine); err != nil {
 		t.Fatalf("无终态形状必须放行: %v", err)
 	}
-	err := lostTerminalErr("x", "warn line\n{\"type\":\"result\",\"result\":\"big\"}\n", false, claudeTerminalLine)
+	err := lostTerminalErr("x", "warn line\n{\"type\":\"result\",\"result\":\"big\"}\n", false, false, claudeTerminalLine)
 	if err == nil || !strings.Contains(err.Error(), "acpx: x") {
 		t.Fatalf("形状命中必须报错并点名适配器: %v", err)
 	}

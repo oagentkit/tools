@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+
+	"github.com/oagentkit/runtime/procx"
 )
 
 // 编译期断言。
@@ -78,8 +80,8 @@ func (e *mimoEvent) errMsg() string {
 // Run 执行 mimo run 任务。
 func (m *Mimo) Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 	st := &mimoStream{req: req}
-	stdout, stderr, code, err := runCLI(ctx, req, m.buildArgv(req), st.handleLine)
-	return st.finalize(stdout, stderr, code, err)
+	res, err := runCLI(ctx, req, m.buildArgv(req), st.handleLine)
+	return st.finalize(res, err)
 }
 
 // buildArgv 构造 mimo CLI 参数（协议面固定：run --format json；argv 语义不改）。
@@ -161,13 +163,13 @@ func mimoTerminalLine(line string) bool {
 // 形状却没被识别 = 行被丢或协议漂移、流带截断留痕 = 终端行大概率已丢，都拒绝
 // 当回答；tools#105：text 非空同样守门——吐过部分文本的跑不得借宽容路径把
 // 陈旧断片当最终回答成功返回）。
-func (s *mimoStream) finalize(stdout, stderr string, code int, err error) (*RunResult, error) {
+func (s *mimoStream) finalize(res procx.RunResult, err error) (*RunResult, error) {
 	// 有错如实报错：不因恰好收到部分文本而把失败跑当成功返回
 	//（2026-09 huginn 实弹教训：纯错误跑曾以 stdout 全文兜底成"成功"，
 	// probe 误判通过、排障被带偏）
 	streamErr := streamError("mimo", "运行错误", s.errMsg)
 	if s.sawFinish {
-		return finalizeStream(stdout, stderr, code, err,
+		return finalizeStream(res.Stdout, res.Stderr, res.ExitCode, err,
 			&RunResult{Text: s.text, SessionID: s.sessionID, Usage: s.usage}, true, streamErr)
 	}
 	if err != nil {
@@ -179,13 +181,14 @@ func (s *mimoStream) finalize(stdout, stderr string, code int, err error) (*RunR
 	text := s.text
 	// 终态/截断守门（tools#83/#94/#105）：text 非空同样要过——吐过部分文本后
 	// step_finish 行被丢（>1MB）或流被截断时，增量片段是陈旧断片，静默当成功
-	// 返回正是 #105 残留面。守门通过（stdout 无终态形状、无截断留痕）时保留
-	// 无终态宽容路径（版本差异下 step_finish 缺失的跑）。
-	if lost := lostTerminalErr("mimo", stdout, false, mimoTerminalLine); lost != nil {
+	// 返回正是 #105 残留面。截断判定面 = StdoutTruncated 结构化字段（tools#178），
+	// 不尾缀匹配 procx 截断文案。守门通过（stdout 无终态形状、无截断事实）时
+	// 保留无终态宽容路径（版本差异下 step_finish 缺失的跑）。
+	if lost := lostTerminalErr("mimo", res.Stdout, res.StdoutTruncated, false, mimoTerminalLine); lost != nil {
 		return nil, lost
 	}
 	if text == "" {
-		text = strings.TrimSpace(stdout) // 事件流不可用时全文兜底（含 ANSI 码的场景由调用方清理）
+		text = strings.TrimSpace(res.Stdout) // 事件流不可用时全文兜底（含 ANSI 码的场景由调用方清理）
 	}
-	return &RunResult{Text: text, SessionID: s.sessionID, Usage: s.usage, ExitCode: code, Raw: []byte(stdout), Stderr: stderrTail(stderr)}, nil
+	return &RunResult{Text: text, SessionID: s.sessionID, Usage: s.usage, ExitCode: res.ExitCode, Raw: []byte(res.Stdout), Stderr: stderrTail(res.Stderr)}, nil
 }

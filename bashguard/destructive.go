@@ -75,7 +75,7 @@ func (d Decision) Risk() RiskTier {
 	}
 }
 
-// destructiveScan 扫描调用序列里的不可逆动作。
+// destructiveScan 扫描调用序列与重定向事实里的不可逆动作。
 //
 // 与只读判定正交：命令被只读门拒了（rm 不在只读表），它仍可能是不可逆的——
 // 而「这条命令不可逆」正是调用方要据此要二次确认的那个事实。
@@ -84,7 +84,11 @@ func (d Decision) Risk() RiskTier {
 // 的消费序列（Invocations）在首个非只读语句处提前截断，前置触礁语句（未知
 // 命令/写重定向/动态展开/控制流）可藏住后置的 rm -rf /——不可逆扫描消费
 // 提前返回的序列，等于给确认门禁开了稳定可复现的旁路。
-func (t *Table) destructiveScan(invs []Invocation) (bool, string) {
+//
+// 第二路吃**重定向事实面**（tools#175）：Destructive 契约把「写设备」列为
+// 覆盖例，但写设备常经重定向到达（`echo x > /dev/sda` 与 `dd of=/dev/sda`
+// 同效）——Redirs 事实本就在判定结果里，只看调用集会让同一破坏面按写法分两档。
+func (t *Table) destructiveScan(invs []Invocation, redirs []RedirInfo) (bool, string) {
 	for _, inv := range invs {
 		if inv.Name == "" {
 			continue
@@ -100,7 +104,56 @@ func (t *Table) destructiveScan(invs []Invocation) (bool, string) {
 			return true, why
 		}
 	}
+	return deviceWriteVerdict(redirs)
+}
+
+// deviceWriteVerdict 重定向事实面的设备写判定（tools#175）：写重定向
+// （Read=false）目标静态落 /dev/ 且非已知无害汇点 ⇒ 不可逆设备写。
+//
+// 目标词含动态展开时目标不可静态判定，不入本判定（仍由只读门的保守拒与
+// Redirs 事实面留给调用方细分）——与 Invocation.Dynamic 的处置同法。
+//
+// 无害汇点之外的 /dev/ 节点一律视为设备写（保守侧：块设备 sd*/nvme*、
+// LVM mapper、mem/kmem 及未来未知节点——多报的代价只是多一次确认，
+// 漏报的代价是设备真被覆写）。
+func deviceWriteVerdict(redirs []RedirInfo) (bool, string) {
+	for _, r := range redirs {
+		if r.Read || r.Dynamic || !strings.HasPrefix(r.Target, "/dev/") {
+			continue
+		}
+		if harmlessDevTarget(strings.TrimPrefix(r.Target, "/dev/")) {
+			continue
+		}
+		return true, fmt.Sprintf("写重定向到设备 %s（不可逆设备写）", r.Target)
+	}
 	return false, ""
+}
+
+// devHarmlessSinks 已知无害设备汇点（整名匹配）：写它们不产生不可逆破坏面。
+// 常见 `> /dev/null`、`2> /dev/null` 形态不得被设备写判据误报。
+var devHarmlessSinks = map[string]bool{
+	"null": true, "zero": true, "full": true,
+	"stdout": true, "stderr": true, "stdin": true,
+	"tty": true, "console": true,
+	"random": true, "urandom": true,
+}
+
+// harmlessDevTarget /dev/ 下无害目标的判定：整名命中无害汇点，或落入
+// 按前缀族豁免的子树（fd/N 进程描述符、pts/N 伪终端、shm/ 内存文件、
+// tty* 串口/终端族——写它们是 IO 不是设备覆写）。
+func harmlessDevTarget(rest string) bool {
+	if rest == "" {
+		return false
+	}
+	if devHarmlessSinks[rest] {
+		return true
+	}
+	for _, prefix := range []string{"fd/", "pts/", "shm/", "tty"} {
+		if strings.HasPrefix(rest, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // destructiveKernel 未注册调度器的内核不可逆判定（sudo/xargs 形态）。

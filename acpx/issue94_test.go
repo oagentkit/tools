@@ -11,38 +11,34 @@ import (
 // lostTerminalErr 只做形状扫描，在残缺 stdout 里找不到形状就放行兜底。
 // 修后：无终态 + 尾部截断留痕 ⇒ fail-closed 报错，拒绝兜底残缺事件流。
 
-// TestStdoutTruncatedMarker stdoutTruncated 判定：完整标记形态才命中，
-// 「（stdout 超过」短语 + 尾缀「已截断）」双条件从紧。
-func TestStdoutTruncatedMarker(t *testing.T) {
-	cases := []struct {
-		stdout string
-		want   bool
-	}{
-		{"plain output", false},
-		{"…（stdout 超过 8388608 字节上限）", false},                // 缺尾缀
-		{"noise\n已截断）", false},                              // 缺短语
-		{"events\n…（stdout 超过 8388608 字节上限，已截断）", true},     // 完整标记
-		{"events\n…（stdout 超过 8388608 字节上限，已截断）\n\n", true}, // 尾随空白容忍
+// TestTruncatedVerdictFromStructuredField_Issue178 tools#178 回归钉：截断判定
+// 面 = procx 结构化字段（RunResult.StdoutTruncated）而非 noteTruncated 人读
+// 文案——判定面与文案解耦。双向钉：
+//   - 结构化字段为 true 且 stdout 无任何截断文案 ⇒ 守门照常命中（文案缺席
+//     不再失效——procx 改文案不再静默重开 tools#94 的已关洞）；
+//   - stdout 恰含完整截断标记文案但结构化字段为 false ⇒ 守门不接管（代理
+//     CLI 自身输出以该短语收尾不再误判 fail-closed 假红）。
+func TestTruncatedVerdictFromStructuredField_Issue178(t *testing.T) {
+	marker := "\n…（stdout 超过 8388608 字节上限，已截断）"
+	if err := lostTerminalErr("claude", "plain events", true, false, claudeTerminalLine); err == nil || !strings.Contains(err.Error(), "tools#94") {
+		t.Fatalf("结构化截断事实在场必须 fail-closed（判定面=字段而非文案，tools#178）: %v", err)
 	}
-	for _, tc := range cases {
-		if got := stdoutTruncated(tc.stdout); got != tc.want {
-			t.Fatalf("stdoutTruncated(%q) = %v，想要 %v", tc.stdout, got, tc.want)
-		}
+	if err := lostTerminalErr("claude", "events"+marker, false, false, claudeTerminalLine); err != nil {
+		t.Fatalf("stdout 含完整截断文案但结构化字段为 false 不得接管（拿文案当协议，tools#178）: %v", err)
 	}
 }
 
-// TestLostTerminalErrTruncatedGate 无终态 + 截断留痕 ⇒ fail-closed；
-// hasTerm=true 时截断留痕不接管（终态优先）。
+// TestLostTerminalErrTruncatedGate 无终态 + 截断事实在场 ⇒ fail-closed；
+// hasTerm=true 时截断事实不接管（终态优先）。
 func TestLostTerminalErrTruncatedGate(t *testing.T) {
-	marker := "\n…（stdout 超过 8388608 字节上限，已截断）"
-	if err := lostTerminalErr("claude", "events"+marker, false, claudeTerminalLine); err == nil || !strings.Contains(err.Error(), "tools#94") {
-		t.Fatalf("无终态+截断留痕必须 fail-closed: %v", err)
+	if err := lostTerminalErr("claude", "events", true, false, claudeTerminalLine); err == nil || !strings.Contains(err.Error(), "tools#94") {
+		t.Fatalf("无终态+截断事实在场必须 fail-closed: %v", err)
 	}
-	if err := lostTerminalErr("claude", "events"+marker, true, claudeTerminalLine); err != nil {
-		t.Fatalf("hasTerm=true 截断留痕不得接管: %v", err)
+	if err := lostTerminalErr("claude", "events", true, true, claudeTerminalLine); err != nil {
+		t.Fatalf("hasTerm=true 截断事实不得接管: %v", err)
 	}
-	if err := lostTerminalErr("claude", "plain fallback text", false, claudeTerminalLine); err != nil {
-		t.Fatalf("无截断留痕的合法兜底不得报错: %v", err)
+	if err := lostTerminalErr("claude", "plain fallback text", false, false, claudeTerminalLine); err != nil {
+		t.Fatalf("无截断事实的合法兜底不得报错: %v", err)
 	}
 }
 

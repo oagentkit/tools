@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/oagentkit/runtime/procx"
 	"github.com/oagentkit/textx/textutil"
 )
 
@@ -74,8 +75,8 @@ type piEvent struct {
 // Run 执行 pi（--mode json 事件流解析）。
 func (p *Pi) Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 	st := &piStream{req: req}
-	stdout, stderr, code, err := runCLI(ctx, req, p.buildArgv(req), st.handleLine)
-	return st.finalize(stdout, stderr, code, err)
+	res, err := runCLI(ctx, req, p.buildArgv(req), st.handleLine)
+	return st.finalize(res, err)
 }
 
 // buildArgv 构造 pi CLI 参数（协议面固定：--mode json -p 事件流；argv 语义不改）。
@@ -173,20 +174,21 @@ func piTerminalLine(line string) bool {
 // 整段 JSONL 事件流当正文返回）；无终态全文兜底前先过终态丢失守门
 // （tools#83：stdout 里有 assistant message_end 形状却没被识别 = 单行超限
 // 被丢或协议漂移，拒绝把事件流原文当回答）。
-func (s *piStream) finalize(stdout, stderr string, code int, err error) (*RunResult, error) {
+func (s *piStream) finalize(res procx.RunResult, err error) (*RunResult, error) {
 	var streamErr error
 	if s.abortLine != "" && !s.sawAssistant {
 		streamErr = streamError("pi", "中止", textutil.TruncEllipsis(s.abortLine, 400))
 	}
 	s.usage.CostUSD = s.cost
 	// 守门只在无执行错且无中止错时接管：那两条路径 finalizeStream 自会如实
-	// 上抛，不因终态形状在 stdout 而改写错误语义
+	// 上抛，不因终态形状在 stdout 而改写错误语义。截断判定面 =
+	// StdoutTruncated 结构化字段（tools#178），不尾缀匹配 procx 截断文案。
 	if err == nil && streamErr == nil && !s.sawAssistant {
-		if lost := lostTerminalErr("pi", stdout, false, piTerminalLine); lost != nil {
+		if lost := lostTerminalErr("pi", res.Stdout, res.StdoutTruncated, false, piTerminalLine); lost != nil {
 			return nil, lost
 		}
 	}
-	return finalizeStream(stdout, stderr, code, err,
+	return finalizeStream(res.Stdout, res.Stderr, res.ExitCode, err,
 		&RunResult{Text: s.lastText, SessionID: s.sessionID, Usage: s.usage},
 		s.sawAssistant, streamErr)
 }

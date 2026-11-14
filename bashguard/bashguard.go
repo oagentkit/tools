@@ -172,7 +172,10 @@ type Invocation struct {
 //
 // 语义边界：
 //   - 只读判定的保守结论不变——任何写重定向（Read=false）本身就把命令判非
-//     只读；本结构是给「非只读之后还要细分目标」的调用方的事实面；
+//     只读；本结构是给「非只读之后还要细分目标」的调用方的事实面，其中
+//     **静态**目标落 /dev/ 的设备写已被不可逆判定消费（tools#175，无害汇点
+//     /dev/null 等除外）——动态目标（Dynamic=true）不可静态判定，仍留给
+//     调用方按各自策略细分；
 //   - heredoc（<< / <<- / <<<）的 Target 是定界符词，**体不在本结构**（体的
 //     动态展开由只读判定自身保守处理）；
 //   - &> / &>> 同时作用于 fd 1 与 2，FD 记 1（Op 已含全量信息）。
@@ -194,6 +197,10 @@ type Decision struct {
 	//
 	// 与 ReadOnly **正交**：只读与否是另一档。一个命令可以「不是只读、但可逆」
 	//（rm file），也可以「不是只读、且不可逆」（rm -rf /）。
+	//
+	// 「写设备」既覆盖调用面（dd of=/dev/sda），也覆盖重定向面（tools#175：
+	// echo x > /dev/sda 与 dd of=/dev/sda 同判——判定消费 Redirs 的静态设备
+	// 目标，无害汇点 /dev/null 等除外；动态目标除外，见 RedirInfo）。
 	//
 	// 语义边界：false 只意味着「没命中已知规则」，**不意味着安全**——
 	// 是否要二次确认是调用方的策略决定，本包只给「这条命令不可逆」这个事实。
@@ -245,12 +252,17 @@ type Decision struct {
 	//     destructive.go 的 destructiveKernel）；
 	//   - eval "rm -rf /x" 的 rm 是字符串数据不是语法调用，只见 eval；
 	//   - Dynamic=true 的调用（参数含 $()/反引号/$VAR）同样入列——动态参数
-	//     本身就是风险信号。
+	//     本身就是风险信号；
+	//   - 超长为头/尾窗 best-effort 集合；**解析失败为空**（tools#181，与
+	//     Redirs 的同款声明对称）——判「文本里有没有出现某调用」前先看
+	//     Unevaluated/OverLength/Unparsed：拒绝判定路径上拿到空集是「没判」
+	//     不是「判净」，空集不等于判净。
 	AllCalls []Invocation
 	// Redirs 全 AST 的重定向事实集（syntax.Walk，tools#79）：语句级、子 shell
 	// (…)、{ …; }、命令替换 $(…) 里的重定向全部可见，与判定路径是否提前返回
-	// 无关。服务集成方的重定向目标判定（写块设备等走 Redirs 不走调用面），
-	// 免集成方为拿重定向再 parse 一遍同一命令（与 AllCalls 的收编动机同型）。
+	// 无关。服务集成方的重定向目标判定（目标细分走 Redirs 不走调用面），
+	// 免集成方为拿重定向再 parse 一遍同一命令（与 AllCalls 的收编动机同型）；
+	// 静态设备写已由不可逆判定消费（tools#175，见 Destructive/RedirInfo 注释）。
 	//
 	// 语义边界见 RedirInfo：heredoc 体不在此结构；写重定向（Read=false）本身
 	// 已使命令非只读，本事实面供非只读之后的目标细分。超长路径为头/尾窗
@@ -369,8 +381,9 @@ func Analyze(cmdStr string, t *Table) Decision {
 	// 那个事实。只读结论先出也不影响它。扫描面是**全量 AllCalls**（tools#44）：
 	// Invocations 是判定路径的消费序列，首个非只读语句即 break、其后的调用
 	// 不在列——曾用它扫不可逆，前置触礁语句（未知命令/写重定向/动态展开/
-	// 控制流）可稳定藏住后置的 rm -rf /。
-	if ok, why := t.destructiveScan(d.AllCalls); ok {
+	// 控制流）可稳定藏住后置的 rm -rf /。第二路吃重定向事实面（tools#175）：
+	// 写设备常经重定向到达（echo x > /dev/sda），与 dd of=/dev/sda 同判。
+	if ok, why := t.destructiveScan(d.AllCalls, d.Redirs); ok {
 		d.Destructive = true
 		d.DestructiveReason = why
 	}
@@ -417,7 +430,7 @@ func (t *Table) overlongDecision(cmdStr string) Decision {
 			d.Redirs = append(d.Redirs, ri)
 		}
 	}
-	if ok, why := t.destructiveScan(d.AllCalls); ok {
+	if ok, why := t.destructiveScan(d.AllCalls, d.Redirs); ok {
 		d.Destructive = true
 		d.DestructiveReason = why
 	}

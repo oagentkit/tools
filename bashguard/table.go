@@ -319,10 +319,22 @@ func defaultDestructive() map[string]Policy {
 			"--no-replace-objects": FlagBool,
 			"--literal-pathspecs":  FlagBool,
 		}, Subcommands: map[string]Policy{
-			"reset":         {DestructiveFlags: []string{"--hard"}},
-			"clean":         {DestructiveFlags: []string{"-f", "--force"}},
-			"push":          {DestructiveFlags: []string{"-f", "--force", "--force-with-lease"}},
+			"reset": {DestructiveFlags: []string{"--hard"}},
+			"clean": {DestructiveFlags: []string{"-f", "--force"}},
+			// push（tools#174）：强推语法面不止 --force 旗——`+refspec`（plus
+			// 前缀）与 --force 同效（DestructiveArgs 前缀匹配覆盖
+			// "+refs/heads/main:…" 整段）；--delete 与 `:refspec`（空 src
+			// refspec）是远端引用删除形态，同一确认门。
+			"push": {DestructiveFlags: []string{"-f", "--force", "--force-with-lease", "--delete"},
+				DestructiveArgs: []string{"+", ":"}},
 			"filter-branch": {Destructive: true},
+			// 引用删除类（tools#174）：branch -d/-D 删分支（-D 强删未合并分支，
+			// 本地删除不可逆——reflog 捞回有有效期且不在所有场景可用）、
+			// tag -d/--delete 删标签、remote remove/rm/delete 删远端登记
+			//（rm 是 git-remote 文档化的 remove 别名）。
+			"branch": {DestructiveFlags: []string{"-d", "-D", "--delete"}},
+			"tag":    {DestructiveFlags: []string{"-d", "--delete"}},
+			"remote": {DestructiveArgs: []string{"remove", "rm", "delete"}},
 		}},
 	}
 }

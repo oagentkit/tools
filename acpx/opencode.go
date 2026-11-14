@@ -34,7 +34,8 @@ func (c *OpenCode) Run(ctx context.Context, req RunRequest) (*RunResult, error) 
 		argv = append(argv, "--session", req.SessionID)
 	}
 
-	stdout, stderr, code, err := runCLI(ctx, req, argv, nil)
+	res, err := runCLI(ctx, req, argv, nil)
+	stdout, stderr, code := res.Stdout, res.Stderr, res.ExitCode
 	if err != nil {
 		return nil, err
 	}

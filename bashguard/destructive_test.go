@@ -501,7 +501,10 @@ func TestDestructiveGitFamily(t *testing.T) {
 		{"git reset --soft HEAD@{1}", false},
 		{"git clean -n", false}, // dry-run
 		{"git push origin main", false},
-		{"git branch -D feature", false}, // 分支可重建（reflog 捞回），不在此表
+		// tools#174 起 branch -D 属引用删除类——「reflog 捞回」的豁免判法被
+		// issue 推翻：reflog 有有效期，强删未合并分支不可逆
+		{"git branch -D feature", true},
+		{"git branch -d feature", true},
 	}
 	for _, c := range cases {
 		d := Analyze(c.cmd, nil)
