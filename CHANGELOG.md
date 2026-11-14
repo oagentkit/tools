@@ -2,6 +2,41 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.15.0] — 2026-11-14
+
+### 修复(workcopy)：deepen fetch 同源收口——DeepenOptions 增期望 clone 源直用现算 URL 不读 config,可篡改 origin 不再外带 token
+
+ensureMergeBase 是 #176 refresh 同款 token 外带通道的第二入口:Token != ""
+时 fetch 目标 "origin" 由 git 读 .git/config 解析、鉴权 scheme 从可被工作
+树写手篡改的 origin URL 反推——set-url 篡改 origin 后触发 deepen 即把宿主
+凭证带到任意主机(http 形态全程明文)。
+- DeepenOptions 加 BaseURL/Owner/Repo 期望 clone 源(WithCloneSource 原子
+  设置):fetch 目标由 cloneURL 现算,与 prepare/refresh 同一单源;鉴权 scheme
+  恒取自现算 URL,config 与 token 注入恒脱钩,可信面只剩调用方 baseURL
+- Pool.EnsureMergeBase 自动注入(CredentialOf 的 baseURL + key 的 owner/
+  repo),自动项排在调用方 opts 之前,显式 WithCloneSource 可覆盖
+- 零值字段退化旧形态(加字段非破坏):既有直连 WithToken 调用方语义不变,
+  DeepenOptions.Token 文档标 ⚠️ 催迁带 Token 调用方;BaseURL 缺 Owner/Repo
+  显式报错(fail-closed),不静默回退
+- 公开 API 形态变更文档写清;攻击样本前后对照:篡改 origin → fetch 打到
+  可信 URL、argv 零 evil、config 不再被读
+
+### 修复(bashguard)：统一派发器解包单源导出 UnwrapDispatch——env/sudo/nohup/setsid 前缀与 --rcfile 夹裸 operand 形态下钻,深度上限 3 声明
+
+guardx#181 的 splitCommand 只覆盖 eval 与「shell + 连续选项簇」两族,
+bash --rcfile x -c(选项间夹裸 operand)/env bash -c/sudo bash -c 不解包,
+外壳包一层后内层命令在段面上不可见,写档判定被漂白。
+- UnwrapDispatch 单源导出解包语义:复合操作符拆段(引号感知,原段保留)
+  + 逐段解包(eval / shell 选项簇含 c / 前缀派发器链 env·sudo·nohup·setsid
+  / 前导赋值),内层脚本体剥对称引号后独立成段——deny/ask 任一段命中,
+  allow 每段命中,解包只多并段,两个方向都取保守侧
+- 选项簇夹 operand 不再卡壳:bash --rcfile x -c 的 rcfile 路径按 operand
+  略过,含 c 的旗标定位(-c/-lc/-ec;c 前后各 ≤3 字母,--rcfile 不误判)
+- 深度上限 MaxDispatchDepth=3 沿用 guardx#181 并文档声明;解不开的形态
+  原样保留(allow 侧恒失配兜底)
+- guardx/permgate 未来改消费本入口(本仓只导出,不改 guardx);判定面
+  (Analyze 只读/不可逆)对三形态的内核兜底同批钉测防回归
+
 ## [v0.14.7] — 2026-11-14
 
 ### 修复(bashguard)：AllCalls 文档补解析失败为空的语义边界——与 Redirs 同款声明对称,空集不等于判净
