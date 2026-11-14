@@ -55,7 +55,24 @@ type DeepenOptions struct {
 	// 形态：私有远端浅克隆加深必 401，EnsureMergeBase 每次报错降级、range
 	// 审查必然丢失。调用方从 Pool.CredentialOf 解析后经 WithToken 传入（与
 	// prepare/refresh 同一凭证源）。零值 = 无鉴权面（公有远端 / file:// fixture）。
+	//
+	// ⚠️ tools#184：带 Token 的调用方**必须同时提供期望 clone 源**
+	//（WithCloneSource，或 BaseURL/Owner/Repo 三字段）——期望源缺位时退化
+	// 旧形态：fetch 目标 "origin" 由 git 读 .git/config 解析、鉴权 scheme 从
+	// 可被工作树写手篡改的 origin URL 反推，token 外带通道在该形态下仍开放
+	//（#176 refresh 同款攻击链的第二入口）。Pool.EnsureMergeBase 自动注入。
 	Token string
+	// BaseURL / Owner / Repo 期望 clone 源（tools#184）：三者由 WithCloneSource
+	// 原子设置（BaseURL 单独设置而缺 Owner/Repo 时显式报错——fail-closed 优于
+	// 静默回退旧形态）。齐备时 deepen fetch 的目标 URL
+	// 由 cloneURL 现算（与 prepare/refresh 同一单源），**直用 URL 不读
+	// .git/config**——config 里的 origin 可被工作树写手篡改（set-url 后触发
+	// deepen 即把 token 带到任意主机）；鉴权 scheme 同样取自现算 URL，config
+	// 与 token 注入恒脱钩，可信面只剩调用方传入的 baseURL（#176 refresh 同
+	// 口径）。file:// baseURL 直通（本地 fixture 无鉴权面）。
+	BaseURL string
+	Owner   string
+	Repo    string
 }
 
 // DeepenOption EnsureMergeBase/EnsureMergeBaseTLS 的可选项（XxxOption 命名
@@ -65,9 +82,20 @@ type DeepenOption func(*DeepenOptions)
 
 // WithToken 深度补全的鉴权 token（tools#160）：deepen fetch 经进程级
 // `-c http.extraheader` 注入 Basic 凭证（token 不进 URL、不落 .git/config，
-// 与包头承诺一致）。
+// 与包头承诺一致）。带 Token 的调用方必须同时经 WithCloneSource 提供期望
+// clone 源（tools#184，见 DeepenOptions.Token）；Pool.EnsureMergeBase 两者
+// 自动注入。
 func WithToken(token string) DeepenOption {
 	return func(o *DeepenOptions) { o.Token = token }
+}
+
+// WithCloneSource deepen fetch 的期望 clone 源（tools#184）：baseURL/owner/
+// repo 三元组，deepen fetch 的目标 URL 由 cloneURL 现算（与 prepare/refresh
+// 同一单源），直用 URL 不读 .git/config——config 对工作树内的执行方（被审
+// agent/代码）可写，从可篡改的 origin 反推 scheme 并附加 token 即把宿主凭证
+// 带到任意主机（#176 refresh 同款攻击链的第二入口）。
+func WithCloneSource(baseURL, owner, repo string) DeepenOption {
+	return func(o *DeepenOptions) { o.BaseURL, o.Owner, o.Repo = baseURL, owner, repo }
 }
 
 // applyDeepenOpts 折叠可选项（nil 项跳过，容忍误传）。
@@ -111,7 +139,9 @@ func (o DeepenOptions) probeTimeout() time.Duration {
 //   - 加深轮失败/预算耗尽仍不可达 → 报错降级。整条消息过 logredact（git 传输
 //     失败回显带凭证 clone URL——ocrshim 通道此错误经 MCP 原样回传 argus）。
 //
-// 私有远端经可选项 WithToken 注入鉴权（tools#160）。
+// 私有远端经可选项 WithToken 注入鉴权（tools#160）；带 Token 时必须同时经
+// WithCloneSource 提供期望 clone 源（tools#184）：fetch 直用现算 URL 不读
+// .git/config，可篡改 origin 的 token 外带通道随之关闭。
 func EnsureMergeBase(ctx context.Context, dir, baseBranch string, timeout time.Duration, opts ...DeepenOption) error {
 	return ensureMergeBase(ctx, dir, baseBranch, timeout, false, applyDeepenOpts(opts))
 }
@@ -127,7 +157,9 @@ func EnsureMergeBaseTLS(ctx context.Context, dir, baseBranch string, timeout tim
 // EnsureMergeBaseOpts EnsureMergeBase 的参数化形态（oagentkit/tools#36）：
 // DeepenOptions 调起步层数/轮数上限/单轮探测超时——单体大仓放宽（万级提交
 // 8 轮可能不够）、CI 资源紧张的宿主收紧；零值字段取包级缺省。整体时间预算
-// 仍由 timeout 统一兜底。鉴权 token 同在 DeepenOptions.Token（tools#160）。
+// 仍由 timeout 统一兜底。鉴权 token 同在 DeepenOptions.Token（tools#160），
+// 带 Token 时须同填期望 clone 源（DeepenOptions.BaseURL/Owner/Repo 或
+// WithCloneSource，tools#184——fetch 直用现算 URL 不读 .git/config）。
 func EnsureMergeBaseOpts(ctx context.Context, dir, baseBranch string, timeout time.Duration, opts DeepenOptions) error {
 	return ensureMergeBase(ctx, dir, baseBranch, timeout, false, opts)
 }
@@ -148,13 +180,31 @@ func ensureMergeBase(ctx context.Context, dir, baseBranch string, timeout time.D
 	if _, err := os.Stat(filepath.Join(dir, ".git", "shallow")); err != nil {
 		return nil // 完整克隆：merge-base 失败非浅历史问题
 	}
-	// 鉴权参数（tools#160）：#124 把三条 git 远程命令中的两条改成进程级注入后，
-	// deepen 是唯一漏注的一条——config 的 origin URL 此时已按契约改成无凭证
-	// 形态，deepen 拿不到任何凭证，私有远端必 401。scheme 从 origin URL 反推
-	//（refresh 同款——file:// fixture 无鉴权面，authGitArgs 返回 nil）；无
-	// token 时不发额外 git 调用，公有远端路径零开销。
+	// fetch 目标与鉴权（tools#184）：提供期望 clone 源（BaseURL/Owner/Repo，
+	// WithCloneSource 原子设置）时 fetch URL 由 cloneURL 现算——与 prepare/
+	// refresh 同一单源，**直用 URL 不读 .git/config**。config 对工作树内的
+	// 执行方（被审 agent/代码）可写，此前 fetch 目标 "origin" 由 git 读
+	// config 解析、鉴权 scheme 从可篡改的 origin 反推——set-url 改写 origin
+	// 的下一次 deepen 即把宿主 token 带到任意主机（http 形态全程明文，#176
+	// refresh 同款攻击链的第二入口）。鉴权 scheme 恒取自现算 URL：config 与
+	// token 注入脱钩，可信面只剩调用方传入的 baseURL。
+	//
+	// 未提供期望源（零值字段）= 旧形态：fetch "origin" 由 git 读 config 解析、
+	// scheme 从 config 反推——带 Token 的调用方必须迁移（见
+	// DeepenOptions.Token 的 ⚠️），无 token 时本分支零额外 git 调用，公有
+	// 远端 / file:// fixture 路径零开销不变。
+	fetchTarget := "origin"
 	var auth []string
-	if opts.Token != "" {
+	if opts.BaseURL != "" {
+		if opts.Owner == "" || opts.Repo == "" {
+			return errors.New("workcopy: DeepenOptions.BaseURL 已提供但 Owner/Repo 缺失——期望 clone 源须三元组齐备（WithCloneSource）")
+		}
+		url := cloneURL(opts.BaseURL, opts.Owner, opts.Repo, opts.Token)
+		fetchTarget = url
+		auth = authGitArgs(schemeOf(url), opts.Token)
+	} else if opts.Token != "" {
+		// 旧形态迁移缺口（tools#184）：scheme 从 config 的 origin 反推——可被
+		// 篡改（refresh 同款——file:// fixture 无鉴权面，authGitArgs 返回 nil）。
 		scheme := "https://"
 		if out, _, _, err := procx.Run(ctx, procx.RunRequest{
 			Argv: []string{"git", "-C", dir, "remote", "get-url", "origin"}, Timeout: 10 * time.Second,
@@ -172,7 +222,7 @@ func ensureMergeBase(ctx context.Context, dir, baseBranch string, timeout time.D
 			Argv: append(append([]string{"git"}, auth...),
 				"-C", dir, "fetch",
 				"--deepen="+strconv.Itoa(opts.startDepth()<<i),
-				"origin", fullRefspec),
+				fetchTarget, fullRefspec),
 			Timeout: remaining,
 		}
 		if insecureTLS {

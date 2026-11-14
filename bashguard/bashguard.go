@@ -22,6 +22,15 @@
 // 上限 10K 字符（对标 ZCode：超长命令不进解析器）。超长路径带 Unevaluated
 // 标记（细分归因 OverLength / Unparsed，tools#80）+ 头/尾窗 best-effort
 // 不可逆扫描——不静默 fail-open。
+//
+// # 派发器解包单源（tools#183）
+//
+// 段级消费方（allow/deny 名单按段匹配的守卫层）需要把 `eval`、`[path/]sh|bash
+// … -c`、`env`/`sudo`/`nohup`/`setsid` 前缀、`bash --rcfile x -c` 选项簇夹
+// operand 这些外壳形态剥开才能看到内层命令。解包语义单源在 UnwrapDispatch
+// （深度上限 MaxDispatchDepth=3）——guardx/permgate 等消费方统一取用，不再
+// 各自维护词法实现；本包判定面（只读/不可逆两档）对派发器载荷另有 AST 级
+// 内核兜底，与词法解包互为犄角。
 package bashguard
 
 import (
@@ -249,7 +258,8 @@ type Decision struct {
 	//   - 包装不剥壳：sudo -n rm -rf /x 是一条调用（sudo，args 含 rm…）——
 	//     sudo/xargs/env 的内核是**参数**不是语法调用，消费方按需自剥
 	//     （本包自身的不可逆扫描已对未注册调度器做内核兜底，见
-	//     destructive.go 的 destructiveKernel）；
+	//     destructive.go 的 destructiveKernel；段级消费方的统一解包入口是
+	//     UnwrapDispatch，tools#183）；
 	//   - eval "rm -rf /x" 的 rm 是字符串数据不是语法调用，只见 eval；
 	//   - Dynamic=true 的调用（参数含 $()/反引号/$VAR）同样入列——动态参数
 	//     本身就是风险信号；
