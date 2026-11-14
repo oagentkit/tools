@@ -14,12 +14,12 @@ func TestRedirectDeviceWrite_Issue175(t *testing.T) {
 		"cat disk.img > /dev/sda",
 		"echo x > /dev/nvme0n1",
 		"echo x > /dev/mapper/vg-lv",
-		"echo x >> /dev/sda",          // 追加形态同是设备写
-		"echo x 2> /dev/sda",          // stderr 通道写设备同判
-		"echo x > /dev/sda1",          // 分区节点
-		"echo x > /dev/mem",           // 字符设备（内存映像）
-		"true && cat x > /dev/sda",    // 复合语句里的设备写不漏
-		"(echo x > /dev/sda)",         // 子 shell 里的设备写（全 AST 事实面）
+		"echo x >> /dev/sda",       // 追加形态同是设备写
+		"echo x 2> /dev/sda",       // stderr 通道写设备同判
+		"echo x > /dev/sda1",       // 分区节点
+		"echo x > /dev/mem",        // 字符设备（内存映像）
+		"true && cat x > /dev/sda", // 复合语句里的设备写不漏
+		"(echo x > /dev/sda)",      // 子 shell 里的设备写（全 AST 事实面）
 		"echo x > /dev/sda # trailing comment",
 	}
 	for _, cmd := range cases {

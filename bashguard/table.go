@@ -319,8 +319,8 @@ func defaultDestructive() map[string]Policy {
 			"--no-replace-objects": FlagBool,
 			"--literal-pathspecs":  FlagBool,
 		}, Subcommands: map[string]Policy{
-			"reset":         {DestructiveFlags: []string{"--hard"}},
-			"clean":         {DestructiveFlags: []string{"-f", "--force"}},
+			"reset": {DestructiveFlags: []string{"--hard"}},
+			"clean": {DestructiveFlags: []string{"-f", "--force"}},
 			// push（tools#174）：强推语法面不止 --force 旗——`+refspec`（plus
 			// 前缀）与 --force 同效（DestructiveArgs 前缀匹配覆盖
 			// "+refs/heads/main:…" 整段）；--delete 与 `:refspec`（空 src

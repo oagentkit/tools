@@ -9,10 +9,10 @@ import (
 // Result 单条检索结果。
 //
 // ⚠️ 威胁等级与消毒义务（tools#180）：三个字段都是**半可信外网内容**
-//（SEO 投毒 / 被抓取页面的攻击者可控字段，敌意等级高于仓库内内容）。进
+// （SEO 投毒 / 被抓取页面的攻击者可控字段，敌意等级高于仓库内内容）。进
 // prompt / 编号列表等任何文本拼装面前必须过结构化消毒——Title 折叠单行、
 // URL 单行化（sanitizeURL 同款）、各字段过 `guardx/fence.EscapeUntrusted`
-//——或直接使用 Searxng.AsTool（结果拼接已内置消毒，tools#49/#63）。
+// ——或直接使用 Searxng.AsTool（结果拼接已内置消毒，tools#49/#63）。
 // 未经消毒原样拼接：字段内嵌换行即可伪造条目与伪指令（与 skillkit#34
 // 同威胁模型）。
 type Result struct {

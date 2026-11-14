@@ -108,7 +108,7 @@ func (t *Table) destructiveScan(invs []Invocation, redirs []RedirInfo) (bool, st
 }
 
 // deviceWriteVerdict 重定向事实面的设备写判定（tools#175）：写重定向
-//（Read=false）目标静态落 /dev/ 且非已知无害汇点 ⇒ 不可逆设备写。
+// （Read=false）目标静态落 /dev/ 且非已知无害汇点 ⇒ 不可逆设备写。
 //
 // 目标词含动态展开时目标不可静态判定，不入本判定（仍由只读门的保守拒与
 // Redirs 事实面留给调用方细分）——与 Invocation.Dynamic 的处置同法。
