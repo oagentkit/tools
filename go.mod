@@ -9,9 +9,9 @@ require (
 	github.com/oagentkit/guardx v0.28.0
 	github.com/oagentkit/runtime v0.13.0
 	github.com/oagentkit/textx v0.12.0
-	github.com/oekit/concurrency v0.39.1
+	github.com/oekit/concurrency v0.39.2
 	github.com/oekit/logx v0.12.0
-	github.com/oekit/pkg v0.55.0
+	github.com/oekit/pkg v0.55.1
 )
 
 require github.com/mattn/go-isatty v0.0.20 // indirect
