@@ -21,9 +21,9 @@ import (
 	"time"
 
 	"github.com/oagentkit/guardx/logredact"
-	pkgprocx "github.com/oekit/pkg/procx"
 	"github.com/oekit/concurrency/singleflight"
 	"github.com/oekit/logx"
+	pkgprocx "github.com/oekit/pkg/procx"
 )
 
 // WorktreeKey 工作副本标识（平台/仓库/PR/SHA）。
