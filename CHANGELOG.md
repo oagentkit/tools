@@ -2,6 +2,56 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.17.0] — 2026-11-23
+
+### 重构：bgjob ctx 取消面 + shellQuote 收编 shellx + 子进程执行单源切 pkg/procx
+
+* refactor(bgjob): Session.Exec/Start/Status/Cleanup 补 ctx 取消面 + shellQuote 收编 pkg/shellx
+- Session.Exec(ctx, command)：SSH 远端 IO 此前无取消无超时（网络挂起时
+  Start/Status/Cleanup 全部无界阻塞）。ctx 为取消面契约：宿主映射到自己
+  会话原语的超时能力，至少保证 ctx 取消后不再阻塞等待。
+- Start(ctx, sess, cmd, ...) / Job.Status(ctx) / Job.Cleanup(ctx)：矩阵
+  ctx-first 约定对齐，ctx 透传到每次 Exec。
+- 仓内 shellQuote 删除，单源收编 oekit/pkg/shellx.Quote（POSIX 单引号
+  转义语义同型）——本仓是 oagentkit 矩阵内唯一未消费 shellx 的手搓点。
+* refactor: 子进程执行单源切 oekit/pkg/procx，解除对 runtime 的依赖边
+tools 对 runtime 的依赖只有 procx 一条（acpx/workcopy/sast 的 CLI agent 与
+git 执行），切 pkg 单源 RunDetailed 后 tools→runtime 依赖边消失。
+- acpx/runCLI（五适配器共用单咽喉）统一显式声明 agent 域配置目录键
+  （CLAUDE_CONFIG_DIR/OPENCODE_CONFIG/XDG_CONFIG_HOME/XDG_DATA_HOME）——
+  procx 收敛后这些键从基础白名单移出（pkg 纪律：工具特定配置走 extra），
+  声明点收敛在 runCLI 一处；行为与下沉前 runtime 白名单逐字对齐。
+- workcopy/sast/hookx 系环境收紧到 pkg 基础白名单+各自显式 extras（git/sast
+  场景不需要 agent 登录态键）。
+- go.mod runtime require 删除。
+
+- 杂务(deps)：依赖地板追到最新——github.com/oekit/pkg v0.60.0
+
+| 依赖 | 现地板 | 抬到 |
+|---|---|---|
+| `github.com/oekit/pkg` | `v0.59.0` | `v0.60.0` |
+## 为什么
+矩阵的**发版时刻地板时效**门禁（`verify_tag_floor --ref HEAD`）要求：各仓 HEAD
+（= 下次发版会发出去的内容）的依赖地板，相对那一刻的依赖最新版本，不能已落后。
+oekit 基座与矩阵模块都在高频发版 ⇒ 地板是**跑步机**，落后一格就会判红。
+## 兼容性实测
+本工具在提交前跑完 `go build` / `go vet` / `go test -race -count=1 ./...`（全绿才提交）
+与 `go mod tidy -diff`（无漂移）⇒ 改动**只影响依赖版本**，零行为差异。
+只改 `go.mod` / `go.sum` ⇒ 不需要 CHANGELOG 条目（版本段由下次发版的 `prewrite` 生成）。
+
+
+- CI：tag push 也触发门禁（与 oekit 侧同口径）
+
+各仓 CI 薄调用层此前只监听 main push / PR / manual ⇒ 打 tag 不触发 CI：
+tag 那一刻没有独立证据（tag 受保护、不可重打，而「tag 后才暴露的错」一个都跑不到）。
+本 PR 只加一行：on.push 下加 tags: ['v*']，让 tag 推送也跑共享 workflow
+（Lint / Test / CHANGELOG coverage / Receipts / 矩阵登记检查），
+与 oekit 侧的薄调用层同口径。
+关联：oagentkit/.github 的 tag 面接线。
+
+
+- 文档(AGENTS)：错误协议宣告对齐实际（stdlib 同型 sentinel；BizError 限 HTTP 宿主，本 org 库层不用）
+
 ## [v0.16.1] — 2026-11-23
 
 - 杂务(deps)：依赖地板追到最新——github.com/oagentkit/guardx v0.29.0
