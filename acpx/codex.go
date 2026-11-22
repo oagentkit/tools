@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/oagentkit/runtime/procx"
+	pkgprocx "github.com/oekit/pkg/procx"
 )
 
 // 编译期断言。
@@ -101,7 +101,7 @@ func (s *codexStream) handleLine(line string) {
 // finalize 收尾装配：output-last-message 优先（官方保证的最终消息，在场即权威）、
 // 事件流 lastText 兜底；错误如实上抛。文件缺席时 lastText 先过正文行对账守门
 // （tools#83/#94/#105，截断判定面 = StdoutTruncated 结构化字段，tools#178）再兜底。
-func (s *codexStream) finalize(res procx.RunResult, err error) (*RunResult, error) {
+func (s *codexStream) finalize(res pkgprocx.RunResult, err error) (*RunResult, error) {
 	if err != nil {
 		// 与 claude 族一致：output-last-message 已有最终消息（agent 正常完成但
 		// 退出码非零）时以结果为准

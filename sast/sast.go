@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/oagentkit/guardx/logredact"
-	"github.com/oagentkit/runtime/procx"
+	pkgprocx "github.com/oekit/pkg/procx"
 	"github.com/oagentkit/textx/reportutil"
 	"github.com/oagentkit/textx/textutil"
 	"github.com/oekit/concurrency/async"
@@ -152,12 +152,13 @@ func runGitleaks(ctx context.Context, cfg Config, dir, baseRef string,
 		logOpts = "origin/" + baseRef + "..HEAD"
 	}
 	args := append(GitleaksArgs(dir, logOpts), "--report-path", reportPath)
-	stdout, stderr, code, err := procx.Run(ctx, procx.RunRequest{
+	probe, err := pkgprocx.RunDetailed(ctx, pkgprocx.RunRequest{
 		Argv:    append([]string{cfg.GitleaksBin}, args...),
 		Dir:     dir,
 		Env:     cfg.EnvAllow,
 		Timeout: timeout,
 	})
+	stdout, stderr, code := probe.Stdout, probe.Stderr, probe.ExitCode
 	if err != nil {
 		res.Err = fmt.Errorf("gitleaks 执行失败: %v: %s", err, truncLine(stderr, 300))
 		return res
@@ -248,12 +249,13 @@ func runSemgrep(ctx context.Context, cfg Config, dir string, paths []string,
 	} else {
 		args = append(args, "--", ".")
 	}
-	stdout, stderr, code, err := procx.Run(ctx, procx.RunRequest{
+	probe, err := pkgprocx.RunDetailed(ctx, pkgprocx.RunRequest{
 		Argv:    append([]string{cfg.SemgrepBin}, args...),
 		Dir:     dir,
 		Env:     cfg.EnvAllow,
 		Timeout: timeout,
 	})
+	stdout, stderr, code := probe.Stdout, probe.Stderr, probe.ExitCode
 	if err != nil || code != 0 {
 		res.Err = fmt.Errorf("semgrep 执行失败: exit=%d err=%v: %s", code, err, truncLine(stdout+"\n"+stderr, 300))
 		return res

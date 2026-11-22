@@ -6,6 +6,7 @@ package bgjob
 // 同用 setsidShim + 真 shell。
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,11 +19,11 @@ import (
 func TestMarkerPathCarriesTaskIdentity_Issue161(t *testing.T) {
 	out := "/var/log/build.out"
 	rs := &recordingSession{next: func(string) (string, int, error) { return "", 0, nil }}
-	j1, err := Start(rs, "sleep 1", WithOutputPath(out))
+	j1, err := Start(context.Background(), rs, "sleep 1", WithOutputPath(out))
 	if err != nil {
 		t.Fatal(err)
 	}
-	j2, err := Start(rs, "sleep 1", WithOutputPath(out))
+	j2, err := Start(context.Background(), rs, "sleep 1", WithOutputPath(out))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +48,7 @@ func TestMarkerPathCarriesTaskIdentity_Issue161(t *testing.T) {
 		return lineFinished + " 0\n", 0, nil
 	}}
 	j2.sess = rsProbe
-	if _, _, err := j2.Status(); err != nil {
+	if _, _, err := j2.Status(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	probe := rsProbe.commands[0]
@@ -62,11 +63,11 @@ func TestMarkerPathCarriesTaskIdentity_Issue161(t *testing.T) {
 func TestInFlightPredecessorNotClaimed_Issue161(t *testing.T) {
 	setsidShim(t)
 	out := filepath.Join(t.TempDir(), "out.log")
-	a, err := Start(localSession{}, "sleep 0.2", WithOutputPath(out))
+	a, err := Start(context.Background(), localSession{}, "sleep 0.2", WithOutputPath(out))
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := Start(localSession{}, "sleep 2", WithOutputPath(out)) // A 仍在跑时 Start
+	b, err := Start(context.Background(), localSession{}, "sleep 2", WithOutputPath(out)) // A 仍在跑时 Start
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,10 +77,10 @@ func TestInFlightPredecessorNotClaimed_Issue161(t *testing.T) {
 		t.Fatalf("A 应 finished/0: got %q", code)
 	}
 	// B 仍在跑：状态与清理都不得认领 A 的终态。
-	if st, _, err := b.Status(); err != nil || st != StateRunning {
+	if st, _, err := b.Status(context.Background()); err != nil || st != StateRunning {
 		t.Fatalf("A 结束后 B 仍应 running（在飞旧任务写回不被认领）: %s %v", st, err)
 	}
-	if ok, err := b.Cleanup(); ok || err == nil {
+	if ok, err := b.Cleanup(context.Background()); ok || err == nil {
 		t.Fatalf("B 在跑应拒绝清理（不得删仍在写的输出）: %v %v", ok, err)
 	}
 	if _, err := os.Stat(out); err != nil {
@@ -89,7 +90,7 @@ func TestInFlightPredecessorNotClaimed_Issue161(t *testing.T) {
 	if code := waitState(t, b, StateFinished); code != "0" {
 		t.Fatalf("B 应 finished/0: got %q", code)
 	}
-	if ok, err := b.Cleanup(); err != nil || !ok {
+	if ok, err := b.Cleanup(context.Background()); err != nil || !ok {
 		t.Fatalf("B 收尾: %v %v", ok, err)
 	}
 }

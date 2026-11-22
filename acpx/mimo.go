@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/oagentkit/runtime/procx"
+	pkgprocx "github.com/oekit/pkg/procx"
 )
 
 // 编译期断言。
@@ -163,7 +163,7 @@ func mimoTerminalLine(line string) bool {
 // 形状却没被识别 = 行被丢或协议漂移、流带截断留痕 = 终端行大概率已丢，都拒绝
 // 当回答；tools#105：text 非空同样守门——吐过部分文本的跑不得借宽容路径把
 // 陈旧断片当最终回答成功返回）。
-func (s *mimoStream) finalize(res procx.RunResult, err error) (*RunResult, error) {
+func (s *mimoStream) finalize(res pkgprocx.RunResult, err error) (*RunResult, error) {
 	// 有错如实报错：不因恰好收到部分文本而把失败跑当成功返回
 	//（2026-09 huginn 实弹教训：纯错误跑曾以 stdout 全文兜底成"成功"，
 	// probe 误判通过、排障被带偏）

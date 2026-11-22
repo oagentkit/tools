@@ -1,12 +1,14 @@
 package bgjob
 
 import (
+	"context"
 	"crypto/rand"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
 
+	"github.com/oekit/pkg/shellx"
 	"github.com/oekit/pkg/stringx"
 )
 
@@ -16,7 +18,13 @@ import (
 type Session interface {
 	// Exec 在远端 shell 执行 command，返回 stdout 与退出码。stderr 由宿主
 	// 自行处置——本原语的启动/探测/清理输出全部走 stdout。
-	Exec(command string) (stdout string, code int, err error)
+	//
+	// ctx 是取消面：网络 IO 不得无界。宿主把 ctx 映射到自己会话原语的超时/
+	// 取消能力（x/crypto/ssh 的 Session.SIGWINCH 之外可经带 deadline 的
+	// channel 读、jumpserver-exec 的会话超时参数等）——原语不做映射，因为
+	// 「ctx 到期后远端命令是否还活着」只有宿主知道；至少要保证 ctx 取消后
+	// Exec 不再阻塞等待。
+	Exec(ctx context.Context, command string) (stdout string, code int, err error)
 }
 
 // State 任务状态（探测结论，marker 协议的三态）。
@@ -90,7 +98,7 @@ func WithOutputPath(path string) StartOption {
 //
 // 用户命令与路径经 shellQuote 单源包裹后拼进命令串，**不做**任何转义改写：
 // cmd 在远端 shell 里逐字执行（含管道/重定向/引号——那是调用方的命令本体）。
-func Start(sess Session, cmd string, opts ...StartOption) (*Job, error) {
+func Start(ctx context.Context, sess Session, cmd string, opts ...StartOption) (*Job, error) {
 	if sess == nil {
 		return nil, errors.New("bgjob: Session 为 nil")
 	}
@@ -110,7 +118,7 @@ func Start(sess Session, cmd string, opts ...StartOption) (*Job, error) {
 		return nil, fmt.Errorf("bgjob: 输出路径须为远端绝对路径: %q", cfg.outputPath)
 	}
 	job := &Job{OutputPath: cfg.outputPath, MarkerPath: markerPathOf(cfg.outputPath), sess: sess}
-	out, code, err := sess.Exec(startCommand(cmd, job.OutputPath, job.MarkerPath))
+	out, code, err := sess.Exec(ctx, startCommand(cmd, job.OutputPath, job.MarkerPath))
 	if err != nil {
 		return nil, fmt.Errorf("bgjob: 启动失败: %w", err)
 	}
@@ -126,8 +134,8 @@ func Start(sess Session, cmd string, opts ...StartOption) (*Job, error) {
 //
 // 退出码仅在 finished 时非空（marker 内容首字段，`echo $?` 的十进制形态；
 // 信号杀死为 128+N）。
-func (j *Job) Status() (state State, exitCode string, err error) {
-	out, code, err := j.sess.Exec(probeCommand(j.OutputPath, j.MarkerPath))
+func (j *Job) Status(ctx context.Context) (state State, exitCode string, err error) {
+	out, code, err := j.sess.Exec(ctx, probeCommand(j.OutputPath, j.MarkerPath))
 	if err != nil {
 		return "", "", fmt.Errorf("bgjob: 探测失败: %w", err)
 	}
@@ -144,8 +152,8 @@ func (j *Job) Status() (state State, exitCode string, err error) {
 //
 // Status→rm 之间存在固有的窄竞态（探测后任务恰好结束）：拒绝保护的是
 // 「RUNNING 强删」的常态事故，终态边界上的一次性收尾不在此防线内。
-func (j *Job) Cleanup() (removed bool, err error) {
-	state, _, err := j.Status()
+func (j *Job) Cleanup(ctx context.Context) (removed bool, err error) {
+	state, _, err := j.Status(ctx)
 	if err != nil {
 		return false, err
 	}
@@ -155,7 +163,7 @@ func (j *Job) Cleanup() (removed bool, err error) {
 	case StateRemoved:
 		return false, nil
 	}
-	out, code, err := j.sess.Exec(cleanupCommand(j.OutputPath, j.MarkerPath))
+	out, code, err := j.sess.Exec(ctx, cleanupCommand(j.OutputPath, j.MarkerPath))
 	if err != nil {
 		return false, fmt.Errorf("bgjob: 清理失败: %w", err)
 	}
@@ -183,12 +191,12 @@ func (j *Job) Cleanup() (removed bool, err error) {
 // 靠的是 marker 路径带任务身份（markerPathOf，tools#161），rm -f 是身份
 // 碰撞与跨版本残留的纵深。
 func startCommand(cmd, outPath, markerPath string) string {
-	inner := "sh -c " + shellQuote(cmd) + "; echo $? > " + shellQuote(markerPath)
-	return "umask 077 && mkdir -p " + shellQuote(filepath.Dir(outPath)) +
-		" && rm -f " + shellQuote(markerPath) +
-		" && : > " + shellQuote(outPath) +
-		" && { setsid nohup sh -c " + shellQuote(inner) +
-		" > " + shellQuote(outPath) + " 2>&1 </dev/null & }"
+	inner := "sh -c " + shellx.Quote(cmd) + "; echo $? > " + shellx.Quote(markerPath)
+	return "umask 077 && mkdir -p " + shellx.Quote(filepath.Dir(outPath)) +
+		" && rm -f " + shellx.Quote(markerPath) +
+		" && : > " + shellx.Quote(outPath) +
+		" && { setsid nohup sh -c " + shellx.Quote(inner) +
+		" > " + shellx.Quote(outPath) + " 2>&1 </dev/null & }"
 }
 
 // markerPathOf marker 路径单源（doc.go 契约 3）：输出路径 + ".rc." + 本次
@@ -204,15 +212,15 @@ func markerPathOf(outputPath string) string {
 // 退出码随行返回）；输出在场 = running（Start 同步建文件，未起不误报）；
 // 双缺 = removed。
 func probeCommand(outPath, markerPath string) string {
-	return "if [ -f " + shellQuote(markerPath) + " ]; then printf '" + lineFinished +
-		" '; cat " + shellQuote(markerPath) +
-		"; elif [ -e " + shellQuote(outPath) + " ]; then printf '" + lineRunning + "\\n'; else printf '" + lineRemoved + "\\n'; fi"
+	return "if [ -f " + shellx.Quote(markerPath) + " ]; then printf '" + lineFinished +
+		" '; cat " + shellx.Quote(markerPath) +
+		"; elif [ -e " + shellx.Quote(outPath) + " ]; then printf '" + lineRunning + "\\n'; else printf '" + lineRemoved + "\\n'; fi"
 }
 
 // cleanupCommand 组清理命令：rm 后 [ -e ] 自证（契约 4）——删完才是删掉。
 func cleanupCommand(outPath, markerPath string) string {
-	return "rm -f " + shellQuote(outPath) + " " + shellQuote(markerPath) +
-		" && if [ -e " + shellQuote(outPath) + " ] || [ -e " + shellQuote(markerPath) +
+	return "rm -f " + shellx.Quote(outPath) + " " + shellx.Quote(markerPath) +
+		" && if [ -e " + shellx.Quote(outPath) + " ] || [ -e " + shellx.Quote(markerPath) +
 		" ]; then printf '" + lineCleanFailed + "\\n'; else printf '" + lineRemoved + "\\n'; fi"
 }
 
@@ -235,13 +243,6 @@ func parseProbe(stdout string) (State, string, error) {
 		}
 	}
 	return "", "", fmt.Errorf("bgjob: 探测输出不可识别（协议漂移?）: %q", snap(stdout))
-}
-
-// shellQuote POSIX 单引号转义单源：路径/命令进远端 shell 前逐字包裹。单引号
-// 内除单引号本身外全部字面——含空格/引号/$ 的路径逐字抵达远端；唯一转义点
-// 收敛在这一个函数（契约 3 的「单源」）。
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
 }
 
 // snap 错误信息里的输出快照（防超长噪音进错误文本）。截断走矩阵同款

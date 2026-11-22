@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/oagentkit/runtime/procx"
+	pkgprocx "github.com/oekit/pkg/procx"
 )
 
 // 编译期断言。
@@ -163,7 +163,7 @@ func claudeTerminalLine(line string) bool {
 // ——成功语义）；is_error 终态如实报错（tools#82，见 onResult）；无终态时
 // 先过终态丢失守门（tools#83）再全文兜底。截断判定面 = RunResult.StdoutTruncated
 // 结构化字段（tools#178），不尾缀匹配 procx 截断文案。
-func (s *claudeStream) finalize(res procx.RunResult, err error) (*RunResult, error) {
+func (s *claudeStream) finalize(res pkgprocx.RunResult, err error) (*RunResult, error) {
 	// 守门只在无执行错时接管：执行错路径（超时/非零退出）finalizeStream
 	// 自会如实上抛，不因终态形状在 stdout 而改写错误语义
 	if err == nil {

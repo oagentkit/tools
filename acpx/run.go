@@ -9,7 +9,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/oagentkit/runtime/procx"
+	pkgprocx "github.com/oekit/pkg/procx"
 	"github.com/oagentkit/textx/textutil"
 	"github.com/oekit/pkg/jsonrepair"
 )
@@ -18,17 +18,20 @@ import (
 // timeout + stdout 限容/按行拆分单源）。各适配器只负责 argv 构造与事件流解析。
 // stderr 一并透传（RunResult.Stderr 的排障通道——此前整条丢弃）。
 //
-// 结构化出口（tools#178）：走 procx.RunDetailed，截断事实以
+// 结构化出口（tools#178）：走 pkgprocx.RunDetailed，截断事实以
 // RunResult.StdoutTruncated 结构化字段透出（procx v0.12.6 起，procx#92）——
 // fail-closed 截断守门（tools#94）此前 `strings.Contains("（stdout 超过")` +
 // `HasSuffix("已截断）")` 匹配 procx 的**人读文案**，文案一改即静默失效（已关
 // 的 P1 洞原样回归）、CLI 自身输出恰以该短语收尾即误判（拿文案当协议）。
-func runCLI(ctx context.Context, req RunRequest, argv []string, onLine func(string)) (procx.RunResult, error) {
+func runCLI(ctx context.Context, req RunRequest, argv []string, onLine func(string)) (pkgprocx.RunResult, error) {
 	if err := req.validate(); err != nil {
-		return procx.RunResult{ExitCode: -1}, err
+		return pkgprocx.RunResult{ExitCode: -1}, err
 	}
-	return procx.RunDetailed(ctx, procx.RunRequest{
-		Argv: argv, Dir: req.WorkDir, Env: req.Env, Timeout: req.Timeout, OnLine: onLine,
+	// agentEnvKeys CLI agent 执行域的配置目录键（procx 收敛后从基础白名单移出，
+	// 由本适配层统一声明——五个 CLI 适配器共用 runCLI 单咽喉，清单只写这一处）。
+	envExtras := []string{"CLAUDE_CONFIG_DIR", "OPENCODE_CONFIG", "XDG_CONFIG_HOME", "XDG_DATA_HOME"}
+	return pkgprocx.RunDetailed(ctx, pkgprocx.RunRequest{
+		Argv: argv, Dir: req.WorkDir, Env: append(envExtras, req.Env...), Timeout: req.Timeout, OnLine: onLine,
 	})
 }
 
@@ -41,8 +44,8 @@ func stderrTail(stderr string) string {
 	return textutil.TruncEllipsis(strings.TrimRight(stderr, "\n"), 400)
 }
 
-// isInterruptedExec 中断类执行错判定（tools#46）：超时（procx.ErrTimeout）、
-// 调用方取消（procx.ErrCanceled）或子进程被信号杀死（外部 kill/OOM：
+// isInterruptedExec 中断类执行错判定（tools#46）：超时（pkgprocx.ErrTimeout）、
+// 调用方取消（pkgprocx.ErrCanceled）或子进程被信号杀死（外部 kill/OOM：
 // exec.ExitError 且 wait status 为信号终止）。这类错意味着「没跑完」——与
 // 「跑完了但退出码非零」（终态优先路径按协议终态处置）是两类语义：前者拿到的
 // 任何文本都只是部分输出，不得代理终态。
@@ -50,7 +53,7 @@ func isInterruptedExec(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, procx.ErrTimeout) || errors.Is(err, procx.ErrCanceled) {
+	if errors.Is(err, pkgprocx.ErrTimeout) || errors.Is(err, pkgprocx.ErrCanceled) {
 		return true
 	}
 	var ee *exec.ExitError
