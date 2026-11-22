@@ -9,9 +9,9 @@ import (
 	"strings"
 	"syscall"
 
-	pkgprocx "github.com/oekit/pkg/procx"
 	"github.com/oagentkit/textx/textutil"
 	"github.com/oekit/pkg/jsonrepair"
+	pkgprocx "github.com/oekit/pkg/procx"
 )
 
 // runCLI 适配器统一执行骨架：validate → 进程组执行（procx：环境白名单 +
