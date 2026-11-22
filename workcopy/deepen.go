@@ -24,7 +24,7 @@ import (
 	"time"
 
 	"github.com/oagentkit/guardx/logredact"
-	"github.com/oagentkit/runtime/procx"
+	pkgprocx "github.com/oekit/pkg/procx"
 )
 
 // fullRefspec 显式全量 refspec（--single-branch 克隆下唯一可靠的补全入口）。
@@ -206,10 +206,10 @@ func ensureMergeBase(ctx context.Context, dir, baseBranch string, timeout time.D
 		// 旧形态迁移缺口（tools#184）：scheme 从 config 的 origin 反推——可被
 		// 篡改（refresh 同款——file:// fixture 无鉴权面，authGitArgs 返回 nil）。
 		scheme := "https://"
-		if out, _, _, err := procx.Run(ctx, procx.RunRequest{
+		if res, err := pkgprocx.RunDetailed(ctx, pkgprocx.RunRequest{
 			Argv: []string{"git", "-C", dir, "remote", "get-url", "origin"}, Timeout: 10 * time.Second,
 		}); err == nil {
-			scheme = schemeOf(strings.TrimSpace(out))
+			scheme = schemeOf(strings.TrimSpace(res.Stdout))
 		}
 		auth = authGitArgs(scheme, opts.Token)
 	}
@@ -218,7 +218,7 @@ func ensureMergeBase(ctx context.Context, dir, baseBranch string, timeout time.D
 		if remaining <= 0 {
 			break
 		}
-		fetchReq := procx.RunRequest{
+		fetchReq := pkgprocx.RunRequest{
 			Argv: append(append([]string{"git"}, auth...),
 				"-C", dir, "fetch",
 				"--deepen="+strconv.Itoa(opts.startDepth()<<i),
@@ -228,9 +228,10 @@ func ensureMergeBase(ctx context.Context, dir, baseBranch string, timeout time.D
 		if insecureTLS {
 			fetchReq.Env = []string{"GIT_SSL_NO_VERIFY=true"}
 		}
-		if _, stderr, _, err := procx.Run(ctx, fetchReq); err != nil {
+		res, err := pkgprocx.RunDetailed(ctx, fetchReq)
+		if err != nil {
 			return errors.New(logredact.Redact(fmt.Sprintf(
-				"浅克隆加深失败（git fetch --deepen）: %v；stderr: %s", err, tail(stderr, 400))))
+				"浅克隆加深失败（git fetch --deepen）: %v；stderr: %s", err, tail(res.Stderr, 400))))
 		}
 		if probeMergeBase(ctx, dir, base, opts.probeTimeout()) {
 			return nil
@@ -244,7 +245,7 @@ func ensureMergeBase(ctx context.Context, dir, baseBranch string, timeout time.D
 // probeMergeBase 本地探测 merge-base 可达（无网络 IO，秒级）。exit 非零一律视为
 // 不可达（含 base 远端引用不存在——由后续 deepen 轮经全量 refspec 创建）。
 func probeMergeBase(ctx context.Context, dir, base string, timeout time.Duration) bool {
-	_, _, _, err := procx.Run(ctx, procx.RunRequest{
+	_, err := pkgprocx.RunDetailed(ctx, pkgprocx.RunRequest{
 		Argv:    []string{"git", "-C", dir, "merge-base", base, "HEAD"},
 		Timeout: timeout,
 	})

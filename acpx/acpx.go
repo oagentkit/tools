@@ -122,7 +122,7 @@ type RunRequest struct {
 	Sandbox string
 	// Env 额外环境变量白名单，两种形态：纯名（"HF_TOKEN"）按名从当前进程
 	// 透传；"KEY=VALUE" 字面注入（同名父进程值不透传——显式注入优先，见
-	// procx.ChildEnv）。值会进入子进程环境，调用方自负泄漏面。
+	// pkgprocx.ChildEnv）。值会进入子进程环境，调用方自负泄漏面。
 	Env []string
 	// Timeout 单次运行超时（0 = 10 分钟缺省）。
 	Timeout time.Duration

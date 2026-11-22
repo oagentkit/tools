@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/oagentkit/runtime/procx"
+	pkgprocx "github.com/oekit/pkg/procx"
 )
 
 func TestKimiStreamJSON(t *testing.T) {
@@ -112,7 +112,7 @@ sleep 30`)
 	if err == nil {
 		t.Fatal("超时被杀不得因有部分文本而当成功返回")
 	}
-	if !errors.Is(err, procx.ErrTimeout) {
+	if !errors.Is(err, pkgprocx.ErrTimeout) {
 		t.Fatalf("超时应可 errors.Is 分类: %v", err)
 	}
 	if res == nil || res.Text != "半截任务的部分输出" || !res.Interrupted {

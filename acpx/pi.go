@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/oagentkit/runtime/procx"
+	pkgprocx "github.com/oekit/pkg/procx"
 	"github.com/oagentkit/textx/textutil"
 )
 
@@ -174,7 +174,7 @@ func piTerminalLine(line string) bool {
 // 整段 JSONL 事件流当正文返回）；无终态全文兜底前先过终态丢失守门
 // （tools#83：stdout 里有 assistant message_end 形状却没被识别 = 单行超限
 // 被丢或协议漂移，拒绝把事件流原文当回答）。
-func (s *piStream) finalize(res procx.RunResult, err error) (*RunResult, error) {
+func (s *piStream) finalize(res pkgprocx.RunResult, err error) (*RunResult, error) {
 	var streamErr error
 	if s.abortLine != "" && !s.sawAssistant {
 		streamErr = streamError("pi", "中止", textutil.TruncEllipsis(s.abortLine, 400))

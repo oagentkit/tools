@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/oagentkit/runtime/procx"
+	pkgprocx "github.com/oekit/pkg/procx"
 )
 
 // fakeCLI 创建可执行的假 CLI 脚本（脚本内容 = shell 代码），返回其路径。
@@ -320,7 +320,7 @@ func TestRequestValidation(t *testing.T) {
 func TestEnvAllowlist(t *testing.T) {
 	t.Setenv("SECRET_TOKEN", "leak-me")
 
-	env := procx.ChildEnv(nil)
+	env := pkgprocx.ChildEnv(nil)
 	joined := strings.Join(env, "\n")
 	if strings.Contains(joined, "SECRET_TOKEN") {
 		t.Fatal("SECRET_TOKEN 不应透传给子进程")
@@ -435,18 +435,18 @@ func TestTimeoutAndCancelSentinels(t *testing.T) {
 	a := NewClaudeCode()
 	a.Bin = bin
 
-	if _, err := a.Run(context.Background(), RunRequest{Prompt: "x", Timeout: 150 * time.Millisecond}); !errors.Is(err, procx.ErrTimeout) {
-		t.Fatalf("超时应 errors.Is procx.ErrTimeout: %v", err)
+	if _, err := a.Run(context.Background(), RunRequest{Prompt: "x", Timeout: 150 * time.Millisecond}); !errors.Is(err, pkgprocx.ErrTimeout) {
+		t.Fatalf("超时应 errors.Is pkgprocx.ErrTimeout: %v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { time.Sleep(100 * time.Millisecond); cancel() }()
 	_, err := a.Run(ctx, RunRequest{Prompt: "x"})
-	if !errors.Is(err, procx.ErrCanceled) {
-		t.Fatalf("调用方取消应 errors.Is procx.ErrCanceled（不得误报超时）: %v", err)
+	if !errors.Is(err, pkgprocx.ErrCanceled) {
+		t.Fatalf("调用方取消应 errors.Is pkgprocx.ErrCanceled（不得误报超时）: %v", err)
 	}
-	if errors.Is(err, procx.ErrTimeout) {
-		t.Fatalf("取消不得同时命中 procx.ErrTimeout: %v", err)
+	if errors.Is(err, pkgprocx.ErrTimeout) {
+		t.Fatalf("取消不得同时命中 pkgprocx.ErrTimeout: %v", err)
 	}
 }
 

@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"github.com/oagentkit/guardx/logredact"
-	"github.com/oagentkit/runtime/procx"
+	pkgprocx "github.com/oekit/pkg/procx"
 	"github.com/oekit/concurrency/singleflight"
 	"github.com/oekit/logx"
 )
@@ -442,7 +442,7 @@ func runGit(ctx context.Context, args []string, insecureTLS bool) error {
 	if insecureTLS {
 		env = append(env, "GIT_SSL_NO_VERIFY=true")
 	}
-	_, _, _, err := procx.Run(ctx, procx.RunRequest{
+	_, err := pkgprocx.RunDetailed(ctx, pkgprocx.RunRequest{
 		Argv:    args,
 		Env:     env,
 		Timeout: gitExecTimeout,
