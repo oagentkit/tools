@@ -2,6 +2,7 @@ package bgjob
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/oekit/pkg/shellx"
 )
 
 // localSession 本地 shell 会话：用 /bin/sh 真跑启动/探测/清理命令——协议的
@@ -17,7 +20,7 @@ import (
 // 路径引号、自证删都是真 shell 语义在验证）。
 type localSession struct{}
 
-func (localSession) Exec(command string) (string, int, error) {
+func (localSession) Exec(ctx context.Context, command string) (string, int, error) {
 	c := exec.Command("/bin/sh", "-c", command)
 	var buf bytes.Buffer
 	c.Stdout = &buf
@@ -39,7 +42,7 @@ type recordingSession struct {
 	next     func(command string) (string, int, error)
 }
 
-func (r *recordingSession) Exec(command string) (string, int, error) {
+func (r *recordingSession) Exec(ctx context.Context, command string) (string, int, error) {
 	r.commands = append(r.commands, command)
 	return r.next(command)
 }
@@ -64,7 +67,7 @@ func waitState(t *testing.T, j *Job, want State) string {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		st, code, err := j.Status()
+		st, code, err := j.Status(context.Background())
 		if err != nil {
 			t.Fatalf("Status: %v", err)
 		}
@@ -86,7 +89,7 @@ func waitState(t *testing.T, j *Job, want State) string {
 func TestStartExitCodeViaMarker(t *testing.T) {
 	setsidShim(t)
 	out := filepath.Join(t.TempDir(), "out.log")
-	job, err := Start(localSession{}, "exit 3", WithOutputPath(out))
+	job, err := Start(context.Background(), localSession{}, "exit 3", WithOutputPath(out))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +113,7 @@ func TestStartExitCodeViaMarker(t *testing.T) {
 func TestStartBareExitStillWritesMarker(t *testing.T) {
 	setsidShim(t)
 	out := filepath.Join(t.TempDir(), "out.log")
-	job, err := Start(localSession{}, "echo hi; exit", WithOutputPath(out))
+	job, err := Start(context.Background(), localSession{}, "echo hi; exit", WithOutputPath(out))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +131,7 @@ func TestPathWithSpacesVerbatim(t *testing.T) {
 	setsidShim(t)
 	root := t.TempDir()
 	out := filepath.Join(root, "my job dir", "out log.txt")
-	job, err := Start(localSession{}, "printf 'payload'", WithOutputPath(out))
+	job, err := Start(context.Background(), localSession{}, "printf 'payload'", WithOutputPath(out))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +144,7 @@ func TestPathWithSpacesVerbatim(t *testing.T) {
 	if _, err := os.Stat(job.MarkerPath); err != nil {
 		t.Fatalf("marker 路径（带任务身份）: %v", err)
 	}
-	ok, err := job.Cleanup()
+	ok, err := job.Cleanup(context.Background())
 	if err != nil || !ok {
 		t.Fatalf("Cleanup = %v, %v", ok, err)
 	}
@@ -152,14 +155,14 @@ func TestPathWithSpacesVerbatim(t *testing.T) {
 func TestCleanupRefusesWhileRunning(t *testing.T) {
 	setsidShim(t)
 	out := filepath.Join(t.TempDir(), "out.log")
-	job, err := Start(localSession{}, "sleep 1", WithOutputPath(out))
+	job, err := Start(context.Background(), localSession{}, "sleep 1", WithOutputPath(out))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st, _, err := job.Status(); err != nil || st != StateRunning {
+	if st, _, err := job.Status(context.Background()); err != nil || st != StateRunning {
 		t.Fatalf("刚启动应为 running: %s %v", st, err)
 	}
-	ok, err := job.Cleanup()
+	ok, err := job.Cleanup(context.Background())
 	if ok || err == nil {
 		t.Fatalf("RUNNING 应拒绝清理: %v %v", ok, err)
 	}
@@ -167,16 +170,16 @@ func TestCleanupRefusesWhileRunning(t *testing.T) {
 		t.Fatalf("拒绝清理后输出文件应原样: %v", err)
 	}
 	waitState(t, job, StateFinished)
-	if ok, err = job.Cleanup(); err != nil || !ok {
+	if ok, err = job.Cleanup(context.Background()); err != nil || !ok {
 		t.Fatalf("FINISHED 后清理: %v %v", ok, err)
 	}
 	if _, err := os.Stat(out); !os.IsNotExist(err) {
 		t.Fatal("清理后输出文件应不在")
 	}
-	if st, _, err := job.Status(); err != nil || st != StateRemoved {
+	if st, _, err := job.Status(context.Background()); err != nil || st != StateRemoved {
 		t.Fatalf("清理后状态应为 removed: %s %v", st, err)
 	}
-	if ok, err := job.Cleanup(); ok || err != nil {
+	if ok, err := job.Cleanup(context.Background()); ok || err != nil {
 		t.Fatalf("重复 Cleanup 幂等（false,nil）: %v %v", ok, err)
 	}
 }
@@ -191,7 +194,7 @@ func TestCommandShapesQuotePathsVerbatim(t *testing.T) {
 
 	// 启动命令（单独会话记录；应答不消费）
 	rsStart := &recordingSession{next: okReply}
-	if _, err := Start(rsStart, `echo it's`, WithOutputPath(out)); err != nil {
+	if _, err := Start(context.Background(), rsStart, `echo it's`, WithOutputPath(out)); err != nil {
 		t.Fatal(err)
 	}
 	start := rsStart.commands[0]
@@ -201,7 +204,7 @@ func TestCommandShapesQuotePathsVerbatim(t *testing.T) {
 		return lineFinished + " 0\n", 0, nil
 	}}
 	job := &Job{OutputPath: out, MarkerPath: out + ".rc", sess: rsProbe}
-	if _, _, err := job.Status(); err != nil {
+	if _, _, err := job.Status(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	probe := rsProbe.commands[0]
@@ -217,7 +220,7 @@ func TestCommandShapesQuotePathsVerbatim(t *testing.T) {
 		}
 		return lineRemoved + "\n", 0, nil // rm 命令自证通过
 	}
-	if ok, err := job2.Cleanup(); err != nil || !ok {
+	if ok, err := job2.Cleanup(context.Background()); err != nil || !ok {
 		t.Fatalf("Cleanup: %v %v", ok, err)
 	}
 	clean := rsClean.commands[1]
@@ -248,7 +251,7 @@ func TestCommandShapesQuotePathsVerbatim(t *testing.T) {
 
 	// 探测/清理是扁平命令：marker 与输出路径整段单引号包裹（含空格/单引号
 	// 逐字），无二次拼接
-	wantOut, wantMarker := shellQuote(out), shellQuote(out+".rc")
+	wantOut, wantMarker := shellx.Quote(out), shellx.Quote(out+".rc")
 	for name, got := range map[string]string{"探测": probe, "清理": clean} {
 		if !strings.Contains(got, wantMarker) {
 			t.Errorf("%s命令缺 marker %s: %s", name, wantMarker, got)
@@ -271,12 +274,12 @@ func TestStatusUnrecognizedOutput(t *testing.T) {
 		return "some banner\nrandom line\n", 0, nil
 	}}
 	job := &Job{OutputPath: "/tmp/o.log", MarkerPath: "/tmp/o.log.rc", sess: rs}
-	if _, _, err := job.Status(); err == nil || !strings.Contains(err.Error(), "不可识别") {
+	if _, _, err := job.Status(context.Background()); err == nil || !strings.Contains(err.Error(), "不可识别") {
 		t.Fatalf("不可识别输出应报错: %v", err)
 	}
 	// 探测命令自身非零退出同样如实上抛
 	rs.next = func(string) (string, int, error) { return "", 42, nil }
-	if _, _, err := job.Status(); err == nil || !strings.Contains(err.Error(), "42") {
+	if _, _, err := job.Status(context.Background()); err == nil || !strings.Contains(err.Error(), "42") {
 		t.Fatalf("探测退出码非零应报错: %v", err)
 	}
 }
@@ -284,16 +287,16 @@ func TestStatusUnrecognizedOutput(t *testing.T) {
 // TestStartValidations 入口守卫：nil 会话、空命令、缺 WithOutputPath、
 // 相对路径——建任务之前 fail-fast。
 func TestStartValidations(t *testing.T) {
-	if _, err := Start(nil, "echo hi", WithOutputPath("/tmp/o.log")); err == nil {
+	if _, err := Start(context.Background(), nil, "echo hi", WithOutputPath("/tmp/o.log")); err == nil {
 		t.Error("nil Session 应报错")
 	}
-	if _, err := Start(localSession{}, "  ", WithOutputPath("/tmp/o.log")); err == nil {
+	if _, err := Start(context.Background(), localSession{}, "  ", WithOutputPath("/tmp/o.log")); err == nil {
 		t.Error("空命令应报错")
 	}
-	if _, err := Start(localSession{}, "echo hi"); err == nil {
+	if _, err := Start(context.Background(), localSession{}, "echo hi"); err == nil {
 		t.Error("缺 WithOutputPath 应报错")
 	}
-	if _, err := Start(localSession{}, "echo hi", WithOutputPath("rel/out.log")); err == nil {
+	if _, err := Start(context.Background(), localSession{}, "echo hi", WithOutputPath("rel/out.log")); err == nil {
 		t.Error("相对路径应报错")
 	}
 }
@@ -307,14 +310,14 @@ func TestStartExecFailure(t *testing.T) {
 	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Start(localSession{}, "echo hi", WithOutputPath(filepath.Join(file, "out.log"))); err == nil {
+	if _, err := Start(context.Background(), localSession{}, "echo hi", WithOutputPath(filepath.Join(file, "out.log"))); err == nil {
 		t.Fatal("mkdir 失败应让 Start 报错")
 	}
 	// 会话层错误同样上抛
 	rs := &recordingSession{next: func(string) (string, int, error) {
 		return "", 0, errors.New("connection reset")
 	}}
-	if _, err := Start(rs, "echo hi", WithOutputPath("/tmp/o.log")); err == nil || !strings.Contains(err.Error(), "connection reset") {
+	if _, err := Start(context.Background(), rs, "echo hi", WithOutputPath("/tmp/o.log")); err == nil || !strings.Contains(err.Error(), "connection reset") {
 		t.Fatalf("会话错误应上抛: %v", err)
 	}
 }
@@ -331,7 +334,7 @@ func TestCleanupSelfCertFailure(t *testing.T) {
 		return lineCleanFailed + "\n", 0, nil // 清理命令自证失败
 	}}
 	job := &Job{OutputPath: "/tmp/o.log", MarkerPath: "/tmp/o.log.rc", sess: rs}
-	ok, err := job.Cleanup()
+	ok, err := job.Cleanup(context.Background())
 	if ok || err == nil || !strings.Contains(err.Error(), "自证失败") {
 		t.Fatalf("自证失败应报错: %v %v", ok, err)
 	}
