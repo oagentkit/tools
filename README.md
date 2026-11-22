@@ -13,6 +13,7 @@ go get github.com/oagentkit/tools
 | `workcopy` | Git 工作副本沙箱：隔离环境 + merge-base 校验 |
 | `sast` | 确定性 SAST 前置扫描（不执行被扫代码） |
 | `bashguard` | Shell 命令静态风险裁决（自 `guardx/bashguard` 迁入 v0.10.0）：经真 shell AST 判定只读性，**不执行命令** |
+| `cmdpolicy` | 命令级放行裁决：把判定面从「工具调用」向下延伸到工具**内部实际执行的那条命令**——**前缀 token 规则**（先分词再比 token，不随引号/转义/空白漂移）+ **三态裁决**（allow / prompt / forbidden）+ **规则自带样例**（加载期用真实判定路径自检，不一致即报错——「从没见过它触发的规则等于没有规则」的机器化）。冲突口径确定：前缀更长者胜 → 同长度取更严 → 同档取名字字典序最小。事实面走同仓 `bashguard`（真 shell AST：全调用集与全重定向集的结构化输出），本仓不维护第二份 shell 解析；分词面走 `oekit/pkg/shellx`（口径归上游一处） |
 | `bgjob` | 远程后台作业 marker 协议原语：经宿主既有 SSH 会话起脱离会话的长任务，退出码 marker 探测（running/finished+退出码）与就地收尾（RUNNING 拒清、REMOVED 自证） |
 
 **bashguard 作为命令黑名单判定底座**（oagentkit/tools#38）：下游自持正则黑名单

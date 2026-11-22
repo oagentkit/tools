@@ -1,6 +1,6 @@
 # AGENTS.md — oagentkit/tools
 
-> 外部工具接入——CLI 编码 agent 统一调用/公开资料检索/git 工作副本沙箱/确定性 SAST 扫描/Shell 命令静态裁决
+> 外部工具接入——CLI 编码 agent 统一调用/公开资料检索/git 工作副本沙箱/确定性 SAST 扫描/Shell 命令静态裁决与命令级放行裁决
 > module：`github.com/oagentkit/tools` · org：[oagentkit = Open Agent Kit](https://github.com/oagentkit)
 > 矩阵分层：**tier 2**（集成层，依赖 tier0/tier1 + 重第三方地板）
 
@@ -13,6 +13,7 @@
 `sast/`
 `bgjob/`      ← 远程后台作业 marker 协议原语（tools#106）
 `bashguard/`  ← 自 guardx 迁入（v0.10.0）：Shell 命令静态裁决，依赖 mvdan.cc/sh
+`cmdpolicy/`  ← 自 goagent-kernel 迁入（v0.16.0）：命令级放行裁决，事实面即同仓 bashguard
 ```
 
 ## 硬规则
