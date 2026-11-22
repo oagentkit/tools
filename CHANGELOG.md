@@ -1,6 +1,19 @@
-# oagentkit-tools CHANGELOG
+# tools CHANGELOG
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
+
+## [v0.16.1] — 2026-11-23
+
+- 杂务(deps)：依赖地板追到最新——github.com/oagentkit/guardx v0.29.0
+
+guardx v0.29.0 自 goagent-kernel 迁入 netguard（出站 URL 守卫）与 ticket（一次性授权票据），
+**无破坏性变更**：既有包的导出面与判据逐字不变。本仓未使用这两个新包 ⇒ 纯依赖地板抬升，
+零行为变化（go.mod / go.sum 之外无改动）。
+目的：让本仓**下一个 tag 的依赖地板在发版时刻即为最新**。tools@v0.16.0 的 tag 落点
+（2026-11-22T16:55:49Z）晚于 guardx v0.29.0 的 tag 落点（16:53:24Z），而其快照地板仍钉在
+guardx v0.28.0 ⇒ 那一刻依赖地板就已落后，被矩阵的「Release floor（发版时刻的地板时效）」
+判红。tag 不可重打，只能靠后续版本补齐——本 PR 随 tools v0.16.1 一并收口。
+
 
 ## [v0.16.0] — 2026-11-23
 
