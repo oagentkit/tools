@@ -21,7 +21,7 @@
 ### 分层与依赖
 
 - 依赖严格自底向上，**禁止反向依赖**。本仓是 tier 2，只允许依赖 tier ≤ 2 的仓。
-- 本仓依赖的矩阵内仓：`guardx`、`runtime`、`textx`。
+- 本仓依赖的矩阵内仓：`guardx`、`textx`。
   ⚠️ guardx 是 tier 0 零依赖底层（`workcopy`/`sast` 用 `guardx/logredact`），
   本仓 tier 2 —— 依赖方向合法。
 - 改 module 路径必须同步：全部 import、go.mod、README 安装行。
@@ -65,7 +65,7 @@ tag 必须落在 CHANGELOG 提交**之后** —— 下游 `go get` 拿到的是 
 
 ## 仓特有纪律
 
-- **CLI 编码 agent 调用必须隔离环境**（用 `runtime.ChildEnv` 构造最小环境），
+- **CLI 编码 agent 调用必须隔离环境**（用 `pkg/procx.ChildEnv` 构造最小环境），
   不得继承完整宿主环境 —— 凭据泄漏面。
 - `workcopy` 的 git 操作必须限制在沙箱目录内，`EnsureMergeBase` 失败要显式报错，
   不得跳过继续。

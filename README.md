@@ -29,7 +29,7 @@ go get github.com/oagentkit/tools
 
 **tier 2** — 集成层，依赖 tier0/tier1 + 重第三方地板。
 
-- 本仓依赖的矩阵内仓：`guardx`、`runtime`、`textx`。
+- 本仓依赖的矩阵内仓：`guardx`、`textx`。
 
 ## 外部依赖地板
 
@@ -54,7 +54,7 @@ gofmt -l .
 ## License
 
 MIT
-- **CLI 编码 agent 调用必须隔离环境**（用 `runtime.ChildEnv` 构造最小环境），
+- **CLI 编码 agent 调用必须隔离环境**（用 `pkg/procx.ChildEnv` 构造最小环境），
   不得继承完整宿主环境 —— 凭据泄漏面。
 - `workcopy` 的 git 操作必须限制在沙箱目录内，`EnsureMergeBase` 失败要显式报错，
   不得跳过继续。
