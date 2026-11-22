@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 
-	pkgprocx "github.com/oekit/pkg/procx"
 	"github.com/oagentkit/textx/textutil"
+	pkgprocx "github.com/oekit/pkg/procx"
 )
 
 // 编译期断言。

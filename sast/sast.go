@@ -20,11 +20,11 @@ import (
 	"time"
 
 	"github.com/oagentkit/guardx/logredact"
-	pkgprocx "github.com/oekit/pkg/procx"
 	"github.com/oagentkit/textx/reportutil"
 	"github.com/oagentkit/textx/textutil"
 	"github.com/oekit/concurrency/async"
 	"github.com/oekit/logx"
+	pkgprocx "github.com/oekit/pkg/procx"
 )
 
 // Config SAST 工具配置（bin 路径来自部署方信任源；全空 = 功能关闭）。
